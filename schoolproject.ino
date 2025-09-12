@@ -2,7 +2,7 @@
  * Enhanced IoT Student Attendance System - Arduino UNO R4 WiFi + Flask Backend
  * Hardware: Arduino UNO R4 WiFi + RC522 RFID + PIR + TFT Display
  * Backend: Enhanced Python Flask REST API with Authentication
- * Updated: September 12, 2025
+ * Updated: September 12, 2025 - UNO R4 Compatible
  */
 #include <SPI.h>
 #include <MFRC522.h>
@@ -158,8 +158,8 @@ void initializeRTC() {
     Serial.println("✅ RTC initialized successfully");
     rtcInitialized = true;
     
-    // Set current time (September 12, 2025, 11:10 PM IST)
-    RTCTime startTime(12, Month::SEPTEMBER, 2025, 23, 10, 0, DayOfWeek::FRIDAY, SaveLight::SAVING_TIME_ACTIVE);
+    // Set current time (September 12, 2025, 11:15 PM IST)
+    RTCTime startTime(12, Month::SEPTEMBER, 2025, 23, 15, 0, DayOfWeek::FRIDAY, SaveLight::SAVING_TIME_ACTIVE);
     RTC.setTime(startTime);
     
     Serial.println("🕐 RTC time set to: " + getCurrentTime() + " " + getCurrentDate());
@@ -431,6 +431,17 @@ String getStudentFromEnhancedFlask(String uid) {
 String logAttendanceToEnhancedFlask(String uid, String regNo, String name, String className, String action, String timestamp, String date) {
   Serial.println("📤 Logging attendance to Enhanced Flask API...");
   
+  // **FIXED: Get MAC address properly for UNO R4 WiFi**
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  String macAddressStr = "";
+  for (int i = 0; i < 6; i++) {
+    if (mac[i] < 16) macAddressStr += "0";
+    macAddressStr += String(mac[i], HEX);
+    if (i < 5) macAddressStr += ":";
+  }
+  macAddressStr.toUpperCase();
+  
   // Prepare enhanced JSON payload
   DynamicJsonDocument doc(1024);
   doc["rfid_uid"] = uid;
@@ -442,7 +453,7 @@ String logAttendanceToEnhancedFlask(String uid, String regNo, String name, Strin
   doc["date"] = date;
   doc["device_info"]["type"] = "Arduino UNO R4 WiFi";
   doc["device_info"]["location"] = "Main Entrance";
-  doc["device_info"]["mac_address"] = WiFi.macAddress();
+  doc["device_info"]["mac_address"] = macAddressStr;
   
   String jsonPayload;
   serializeJson(doc, jsonPayload);
@@ -482,13 +493,24 @@ String logAttendanceToEnhancedFlask(String uid, String regNo, String name, Strin
 void logUnknownCardToEnhancedFlask(String uid) {
   Serial.println("⚠️ Logging unknown card to Enhanced Flask API: " + uid);
   
+  // **FIXED: Get MAC address properly for UNO R4 WiFi**
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  String macAddressStr = "";
+  for (int i = 0; i < 6; i++) {
+    if (mac[i] < 16) macAddressStr += "0";
+    macAddressStr += String(mac[i], HEX);
+    if (i < 5) macAddressStr += ":";
+  }
+  macAddressStr.toUpperCase();
+  
   DynamicJsonDocument doc(512);
   doc["rfid_uid"] = uid;
   doc["timestamp"] = getCurrentTime();
   doc["date"] = getCurrentDate();
   doc["device_info"]["type"] = "Arduino UNO R4 WiFi";
   doc["device_info"]["location"] = "Main Entrance";
-  doc["device_info"]["mac_address"] = WiFi.macAddress();
+  doc["device_info"]["mac_address"] = macAddressStr;
   
   String jsonPayload;
   serializeJson(doc, jsonPayload);
@@ -508,12 +530,23 @@ void logUnknownCardToEnhancedFlask(String uid) {
 void sendHeartbeat() {
   Serial.println("💓 Sending heartbeat to Enhanced Flask server...");
   
+  // **FIXED: Get MAC address properly for UNO R4 WiFi**
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  String macAddressStr = "";
+  for (int i = 0; i < 6; i++) {
+    if (mac[i] < 16) macAddressStr += "0";
+    macAddressStr += String(mac[i], HEX);
+    if (i < 5) macAddressStr += ":";
+  }
+  macAddressStr.toUpperCase();
+  
   DynamicJsonDocument doc(512);
   doc["device_type"] = "Arduino UNO R4 WiFi";
-  doc["mac_address"] = WiFi.macAddress();
+  doc["mac_address"] = macAddressStr;
   doc["uptime"] = millis();
   doc["daily_scans"] = dailyScans;
-  doc["memory_free"] = freeMemory();
+  // **REMOVED: freeMemory() - not supported on renesas architecture**
   doc["wifi_rssi"] = WiFi.RSSI();
   doc["timestamp"] = getCurrentTime();
   
@@ -533,6 +566,9 @@ void sendHeartbeat() {
     Serial.println("💓 Heartbeat sent successfully");
   }
 }
+
+// **REMOVED: freeMemory() function - not supported on renesas architecture**
+// The sbrk() function is not available on Arduino UNO R4 WiFi (renesas architecture)
 
 // Utility Functions
 String getRFIDString() {
@@ -584,11 +620,6 @@ String getCurrentDate() {
   } else {
     return "2025-09-12"; // Current date
   }
-}
-
-int freeMemory() {
-  char top;
-  return &top - reinterpret_cast<char*>(sbrk(0));
 }
 
 // Enhanced Display Functions
@@ -708,14 +739,6 @@ void displayScanMessage() {
   tft.println("Enhanced scanning...");
   tft.setCursor(35, 190);
   tft.println("12 second window");
-  
-  // Show countdown animation
-  for (int i = 12; i > 0 && systemActive; i--) {
-    tft.fillRect(250, 210, 70, 20, ILI9341_BLACK);
-    tft.setCursor(250, 210);
-    tft.println(String(i) + "s");
-    delay(100);
-  }
 }
 
 void displaySuccess(String line1, String line2, String className) {
