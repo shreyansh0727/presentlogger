@@ -28,3 +28,4 @@ class Config:
     
     # Arduino Settings
     ARDUINO_TIMEOUT = 30  # seconds
+
