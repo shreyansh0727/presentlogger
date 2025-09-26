@@ -1,448 +1,753 @@
-/*
- * Enhanced IoT Student Attendance System - Arduino UNO R4 WiFi + Flask Backend
- * Hardware: Arduino UNO R4 WiFi + RC522 RFID + PIR + TFT Display
- * Backend: Enhanced Python Flask REST API with Authentication
- * Updated: September 12, 2025 - UNO R4 Compatible
- */
 #include <SPI.h>
 #include <MFRC522.h>
-#include <WiFiS3.h>           // Built-in WiFi library for UNO R4 WiFi
+#include <WiFiS3.h>
 #include <ArduinoHttpClient.h>
 #include <ArduinoJson.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ILI9341.h>
-#include <RTC.h>              // Built-in Real-Time Clock
+#include <RTC.h>
+#include "Arduino_LED_Matrix.h"  // UNO R4 WiFi 12x8 matrix driver
 
-// Pin Definitions
-#define RST_PIN         9
-#define SS_PIN          10
-#define PIR_PIN         2
-#define BUZZER_PIN      4
-#define GREEN_LED       5
-#define RED_LED         3
-#define TFT_CS          8
-#define TFT_RST         7
-#define TFT_DC          6
+// ---------------------------- Pins ----------------------------
+#define RST_PIN       9
+#define SS_PIN        10
+#define PIR_PIN       2
+#define BUZZER_PIN    4
+#define GREEN_LED     5
+#define RED_LED       3
 
-// Initialize components
-MFRC522 mfrc522(SS_PIN, RST_PIN);
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC, TFT_RST);
+// --------------------------- Timing ---------------------------
+#define HEARTBEAT_MS       30000
+#define COOLDOWN_MS        3000
+#define MOTION_MS          12000
+#define STATUS_UPDATE_MS   10000
 
-// WiFi and Server Configuration
-char ssid[] = "YOUR_WIFI_SSID";        // Update with your WiFi network name
-char password[] = "YOUR_WIFI_PASSWORD"; // Update with your WiFi password
-char serverAddress[] = "192.168.31.104"; // Update with your computer's IP address
-int serverPort = 5000;                  // Flask server port
-char apiKey[] = "your-api-key-here";    // API key from Flask dashboard
+// Timezone (IST +5:30)
+const long TZ_OFFSET_SECS = 19800;
 
+// -------------------------- Network ---------------------------
+char ssid[] = "SHREYANSH 9748";
+char password[] = "84!6zA29";
+char serverAddress[] = "192.168.137.1";
+int  serverPort = 5000;
+char apiKey[] = "EUVAP9gi-c2N5giBzpg_CcUQ70UWb4Vf6zk4NMlz9V4";
+
+// ------------------------- Instances --------------------------
 WiFiClient wifi;
-HttpClient client = HttpClient(wifi, serverAddress, serverPort);
+HttpClient client(wifi, serverAddress, serverPort);
+MFRC522 mfrc522(SS_PIN, RST_PIN);
+ArduinoLEDMatrix matrix;
 
-// System variables
+// ---------------------- State variables -----------------------
 bool systemActive = false;
-unsigned long lastMotionTime = 0;
-unsigned long rfidActiveWindow = 12000; // 12 seconds
 bool pirTriggered = false;
 bool wifiConnected = false;
 bool rtcInitialized = false;
 bool serverConnected = false;
-unsigned long lastCardTime = 0;
-String lastCardUID = "";
-String serverVersion = "";
+bool rfidConnected = false;
 int dailyScans = 0;
+
+unsigned long lastMotionTime = 0;
 unsigned long lastHeartbeat = 0;
+unsigned long lastCardTime = 0;
+unsigned long lastStatusUpdate = 0;
+unsigned long lastRfidCheck = 0;
+
+String lastCardUID = "";
+String serverVer = "";
+String deviceId = "";
+
+// ======================== Animator (non-blocking) =========================
+struct Frame {
+  uint32_t w0, w1, w2;
+  uint16_t ms;
+};
+
+static inline void load3(const Frame& f) {
+  uint32_t buf[3] = { f.w0, f.w1, f.w2 };
+  matrix.loadFrame(buf);
+}
+
+class Animator {
+ public:
+  void play(const Frame* seq, size_t count, bool loop=true, bool clearAfter=false) {
+    sequence = seq; length = count; looping = loop; index = 0; nextAt = 0;
+    running = (seq && count); clearOnStop = clearAfter;
+  }
+  void stop() { running = false; if (clearOnStop) matrix.clear(); }
+  bool isRunning() const { return running; }
+  void update() {
+    if (!running) return;
+    const unsigned long now = millis();
+    if (now >= nextAt) {
+      const Frame& f = sequence[index];
+      load3(f);
+      nextAt = now + f.ms;
+      index++;
+      if (index >= length) {
+        if (looping) index = 0;
+        else { running = false; if (clearOnStop) matrix.clear(); }
+      }
+    }
+  }
+ private:
+  const Frame* sequence = nullptr;
+  size_t length = 0, index = 0;
+  bool looping = true, running = false, clearOnStop = false;
+  unsigned long nextAt = 0;
+};
+
+Animator anim;
+
+// Cooperative waits that keep animations running
+static void waitWithAnim(uint32_t ms) {
+  const unsigned long t0 = millis();
+  while (millis() - t0 < ms) { anim.update(); delay(1); }
+}
+static void waitAnimDone() {
+  while (anim.isRunning()) { anim.update(); delay(1); }
+}
+
+// ======================= Frames (12x8 timed) =======================
+// 1) Advanced pulsing heartbeat
+static const Frame HEART[] = {
+  { 0x00000000, 0x00000000, 0x060C0000,  80 },
+  { 0x00000000, 0x06CC6000, 0x04489000,  70 },
+  { 0x06CC6600, 0x04489910, 0x0264A400,  60 },
+  { 0x036DCC9C, 0x0449991C, 0x0264A400, 100 },
+  { 0x3FFFFFFF, 0x7FFFFFFF, 0x3FFFFFFF, 150 },
+  { 0x036DCC9C, 0x0449991C, 0x0264A400,  80 },
+  { 0x06CC6600, 0x04489910, 0x0264A400,  60 },
+  { 0x00000000, 0x06CC6000, 0x04489000,  70 },
+  { 0x00000000, 0x00000000, 0x060C0000, 100 },
+  { 0x00000000, 0x06CC6000, 0x04489000,  60 },
+  { 0x036DCC9C, 0x0449991C, 0x0264A400,  80 },
+  { 0x3FFFFFFF, 0x7FFFFFFF, 0x3FFFFFFF, 120 },
+  { 0x06CC6600, 0x04489910, 0x0264A400,  60 },
+  { 0x00000000, 0x00000000, 0x060C0000,  80 }
+};
+
+// 2) Wi‑Fi signal waves
+static const Frame WIFI[] = {
+  { 0x00000000, 0x01800000, 0x00000000, 100 },
+  { 0x00000000, 0x03C00000, 0x18000000, 120 },
+  { 0x7E000000, 0x42000000, 0x3C000000, 140 },
+  { 0xFF800000, 0x80400000, 0x7E000000, 160 },
+  { 0xFFC00000, 0x80200000, 0xFF800000, 200 },
+};
+
+// 3) Success checkmark
+static const Frame CHECK[] = {
+  { 0x00000000, 0x00000000, 0x00100000, 100 },
+  { 0x00000000, 0x00000000, 0x00180000,  80 },
+  { 0x00000000, 0x00100000, 0x001C0000,  80 },
+  { 0x00200000, 0x00180000, 0x001E0000,  80 },
+  { 0x00600000, 0x001C0000, 0x001F0000,  80 },
+  { 0x00E00000, 0x001E0000, 0x001F8000, 200 },
+  { 0x00FE0000, 0x001FE000, 0x001FF800, 300 },
+  { 0x00E00000, 0x001E0000, 0x001F8000, 150 },
+};
+
+// 4) Error X
+static const Frame ERRORX[] = {
+  { 0x81000000, 0x42000000, 0x81000000, 100 },
+  { 0xC3000000, 0x66000000, 0xC3000000,  80 },
+  { 0xE7000000, 0x7E000000, 0xE7000000,  60 },
+  { 0xFF800000, 0xFF800000, 0xFF800000, 150 },
+  { 0xE7000000, 0x7E000000, 0xE7000000,  60 },
+  { 0xC3000000, 0x66000000, 0xC3000000,  80 },
+  { 0x81000000, 0x42000000, 0x81000000, 100 },
+};
+
+// 5) Loading spinner (looping)
+static const Frame SPINNER[] = {
+  { 0x18000000, 0x00000000, 0x00000000, 80 },
+  { 0x30000000, 0x00000000, 0x00000000, 80 },
+  { 0x00000000, 0x30000000, 0x00000000, 80 },
+  { 0x00000000, 0x00000000, 0x18000000, 80 },
+  { 0x00000000, 0x00000000, 0x0C000000, 80 },
+  { 0x00000000, 0x00000000, 0x06000000, 80 },
+  { 0x00000000, 0x06000000, 0x00000000, 80 },
+  { 0x0C000000, 0x00000000, 0x00000000, 80 },
+};
+
+// 6) RFID scan waves
+static const Frame SCAN[] = {
+  { 0x00000000, 0x01800000, 0x00000000, 100 },
+  { 0x00000000, 0x03C00000, 0x24000000, 120 },
+  { 0x7E000000, 0x66000000, 0x7E000000, 140 },
+  { 0xFF800000, 0xC1800000, 0xFF800000, 160 },
+  { 0xFFC00000, 0x80400000, 0xFFC00000, 200 },
+};
+
+// 7) Boot sequence
+static const Frame BOOT[] = {
+  { 0x80000000, 0x00000000, 0x00000000, 100 },
+  { 0xC0000000, 0x00000000, 0x00000000,  80 },
+  { 0xF0000000, 0x00000000, 0x00000000,  80 },
+  { 0xFF000000, 0x00000000, 0x00000000, 120 },
+  { 0xFF000000, 0x80000000, 0x00000000,  80 },
+  { 0xFF000000, 0xFF000000, 0x00000000, 120 },
+  { 0xFF000000, 0xFF000000, 0x80000000,  80 },
+  { 0xFF000000, 0xFF000000, 0xFF000000, 300 },
+};
+
+// 8) Text glyphs (single-frame)
+static const Frame TEXT_R[]   = { { 0xFC000000, 0x84840000, 0x78840000, 300 } };
+static const Frame TEXT_E[]   = { { 0xFC000000, 0x80840000, 0xFC000000, 300 } };
+static const Frame TEXT_A[]   = { { 0x78000000, 0x84FC0000, 0x84000000, 300 } };
+static const Frame TEXT_D[]   = { { 0xF8000000, 0x84840000, 0xF8000000, 300 } };
+static const Frame TEXT_Y[]   = { { 0x84000000, 0x48300000, 0x30000000, 300 } };
+static const Frame TEXT_OK[]  = { { 0x78840000, 0x84788400, 0x78000000, 500 } };
+static const Frame TEXT_ERR[] = { { 0xFC808400, 0xF8FC8000, 0xFC000000, 500 } };
+
+// ===================== Forward declarations (safe) =======================
+void uiBanner();
+void uiStatus();
+void uiConnectingWiFi();
+void uiReady();
+void uiMotion();
+void uiError(const String& title, const String& msg);
+void uiSuccess(const String& name, const String& className, const String& regNo, const String& action, const String& t, const String& d);
+void uiDuplicate();
+void uiTimeout();
+void uiLate(const String& name, const String& t);  // ensures visibility
+
+String getCurrentTime();
+String getCurrentDate();
+String getRFIDString();
+void connectToWiFi();
+bool testFlaskConnection();
+void syncTimeWithNTP();
+void sendHeartbeat();
+void processAttendance(String rfidUID);
+String getStudentFromEnhancedFlask(String uid);
+String logAttendanceToEnhancedFlask(String uid, String regNo, String name, String className, String action, String timestamp, String date);
+void logUnknownCardToEnhancedFlask(String uid);
+void buzzerSuccess();
+void buzzerFail();
+void buzzerWarning();
+
+// ======================= UI animation wrappers ============================
+static void showAdvancedHeartbeat() {
+  Serial.println("💓 Advanced heartbeat animation");
+  anim.play(HEART, sizeof(HEART)/sizeof(HEART[0]), false, true);
+  waitAnimDone();
+}
+static void showWiFiWaves() {
+  Serial.println("📶 WiFi connection waves");
+  for (int i=0; i<3; i++) { anim.play(WIFI, sizeof(WIFI)/sizeof(WIFI[0]), false, true); waitAnimDone(); }
+}
+static void startLoadingSpinner() {
+  Serial.println("⏳ Loading spinner (looping)");
+  anim.play(SPINNER, sizeof(SPINNER)/sizeof(SPINNER[0]), true, false);
+}
+static void stopSpinnerClear() { anim.stop(); matrix.clear(); }
+static void showSuccessCheckmark() {
+  Serial.println("✅ Success checkmark animation");
+  anim.play(CHECK, sizeof(CHECK)/sizeof(CHECK[0]), false, true); waitAnimDone();
+}
+static void showErrorFlash() {
+  Serial.println("❌ Error flash animation");
+  for (int i=0; i<3; i++) { anim.play(ERRORX, sizeof(ERRORX)/sizeof(ERRORX[0]), false, true); waitAnimDone(); }
+}
+static void showRFIDScanWaves() {
+  Serial.println("📡 RFID scan waves");
+  for (int i=0; i<2; i++) { anim.play(SCAN, sizeof(SCAN)/sizeof(SCAN[0]), false, true); waitAnimDone(); }
+}
+static void showBootSequence() {
+  Serial.println("🚀 Boot sequence animation");
+  anim.play(BOOT, sizeof(BOOT)/sizeof(BOOT[0]), false, true); waitAnimDone();
+}
+static void showScrollingText(String text) {
+  Serial.println("📝 Text: " + text);
+  if (text.indexOf("READY") >= 0) {
+    anim.play(TEXT_R,1,false,true); waitAnimDone();
+    anim.play(TEXT_E,1,false,true); waitAnimDone();
+    anim.play(TEXT_A,1,false,true); waitAnimDone();
+    anim.play(TEXT_D,1,false,true); waitAnimDone();
+    anim.play(TEXT_Y,1,false,true); waitAnimDone();
+  } else if (text.indexOf("OK") >= 0) {
+    anim.play(TEXT_OK,1,false,true); waitAnimDone();
+  } else if (text.indexOf("ERR") >= 0) {
+    anim.play(TEXT_ERR,1,false,true); waitAnimDone();
+  } else {
+    anim.play(TEXT_OK,1,false,true); waitAnimDone();
+  }
+}
+
+// =========================== UI functions ================================
+void uiBanner() {
+  Serial.println("=====================================");
+  Serial.println("🚀 UNO R4 WiFi Attendance (Advanced Matrix)");
+  Serial.println("=====================================");
+  showBootSequence();
+}
+void uiStatus() {
+  Serial.println("\n📊 === SYSTEM STATUS ===");
+  Serial.println("🕐 Time: " + getCurrentTime() + " | Date: " + getCurrentDate());
+  Serial.println("📶 WiFi: " + String(wifiConnected ? "Connected" : "Disconnected"));
+  Serial.println("🖥️  Server: " + String(serverConnected ? "Online" : "Offline"));
+  Serial.println("📡 RFID: " + String(rfidConnected ? "Connected" : "Disconnected"));
+  Serial.println("📈 Daily Scans: " + String(dailyScans));
+  Serial.println("💾 Uptime: " + String(millis() / 1000) + " s");
+  if (wifiConnected) {
+    Serial.println("📶 RSSI: " + String(WiFi.RSSI()) + " dBm");
+    Serial.println("🌐 IP: " + WiFi.localIP().toString());
+  }
+  Serial.println("========================\n");
+}
+void uiConnectingWiFi() {
+  Serial.println("\n🔗 === CONNECTING TO WIFI ===");
+  Serial.println("Network: " + String(ssid));
+  Serial.println("=============================\n");
+  showWiFiWaves();
+}
+void uiReady() {
+  Serial.println("\n✅ === SYSTEM READY ===");
+  Serial.println("⏰ " + getCurrentTime() + " | 📅 " + getCurrentDate());
+  Serial.println("👋 Approach the reader with your card");
+  Serial.println("=======================\n");
+  showScrollingText("READY");
+}
+void uiMotion() {
+  Serial.println("\n🚶 === MOTION DETECTED ===");
+  Serial.println("Please show your RFID card now");
+  Serial.println("12 second scan window active");
+  Serial.println("==========================\n");
+  showRFIDScanWaves();
+}
+void uiError(const String& title, const String& msg) {
+  Serial.println("\n❌ === ERROR ===");
+  Serial.println("🚨 " + title);
+  Serial.println("💬 " + msg);
+  Serial.println("RED LED ON");
+  digitalWrite(RED_LED, HIGH);
+  showErrorFlash();
+  Serial.println("================\n");
+}
+void uiSuccess(const String& name, const String& className, const String& regNo, const String& action, const String& t, const String& d) {
+  Serial.println("\n✅ === ATTENDANCE SUCCESS ===");
+  Serial.println("👤 Name: " + name);
+  Serial.println("🎓 Class: " + className);
+  Serial.println("🆔 Reg No: " + regNo);
+  Serial.println("📝 Action: " + action);
+  Serial.println("🕐 Time: " + t);
+  Serial.println("📅 Date: " + d);
+  digitalWrite(RED_LED, LOW);
+  showSuccessCheckmark();
+  showScrollingText("OK");
+  Serial.println("=============================\n");
+}
+void uiDuplicate() {
+  Serial.println("\n⚠️  === DUPLICATE SCAN ===");
+  Serial.println("Please wait 3 seconds between scans");
+  Serial.println("=========================\n");
+  showScrollingText("WAIT");
+}
+void uiTimeout() {
+  Serial.println("\n⏰ === SCAN TIMEOUT ===");
+  Serial.println("No card detected within 12 seconds");
+  Serial.println("=======================\n");
+  showScrollingText("TIMEOUT");
+}
+void uiLate(const String& name, const String& t) {
+  Serial.println("\n🟠 === LATE ARRIVAL ===");
+  Serial.println("👤 Student: " + name);
+  Serial.println("🕐 Arrival: " + t);
+  Serial.println("📅 Date: " + getCurrentDate());
+  Serial.println("=======================\n");
+  showScrollingText("LATE");
+}
+
+// ======================== System helpers and logic ========================
+String getDeviceId() {
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  char buf[18];
+  sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]);
+  return String(buf);
+}
 
 void setup() {
   Serial.begin(115200);
   while (!Serial) { delay(10); }
-  
-  Serial.println("🚀 Starting Enhanced Arduino UNO R4 WiFi Attendance System v2.0");
-  Serial.println("📡 Connecting to Enhanced Flask Backend API");
-  Serial.println("🔐 With API Key Authentication");
-  
-  // Initialize pins
+
   pinMode(PIR_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(GREEN_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
-  
-  // Initialize SPI and RFID
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(GREEN_LED, LOW);
+  digitalWrite(RED_LED, LOW);
+
+  matrix.begin();  // start 12x8 matrix
+  uiBanner();
+
   SPI.begin();
   mfrc522.PCD_Init();
-  Serial.println("✅ MFRC522 RFID Reader initialized");
-  
-  // Initialize TFT display
-  tft.begin();
-  tft.setRotation(3);
-  tft.fillScreen(ILI9341_BLACK);
-  displayWelcome();
-  Serial.println("✅ TFT Display initialized");
-  
-  // Initialize RTC with current time
-  initializeRTC();
-  
-  // Connect to WiFi
-  connectToWiFi();
-  
-  // Test Enhanced Flask server connection
-  if (wifiConnected) {
-    testEnhancedFlaskConnection();
+  byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+  rfidConnected = (v != 0x00 && v != 0xFF);
+  Serial.print("🔍 MFRC522 VersionReg: 0x"); Serial.println(v, HEX);
+  Serial.println(rfidConnected ? "✅ RFID comm OK" : "❌ RFID comm failed");
+
+  if (RTC.begin()) {
+    rtcInitialized = true;
+    RTCTime t(26, Month::SEPTEMBER, 2025, 19, 11, 0, DayOfWeek::FRIDAY, SaveLight::SAVING_TIME_ACTIVE);
+    RTC.setTime(t);
+    Serial.println("✅ RTC initialized");
+  } else {
+    Serial.println("❌ RTC init failed");
   }
-  
-  Serial.println("🎉 Enhanced Arduino UNO R4 WiFi Attendance System Ready!");
-  Serial.println("📊 Features: Real-time sync, Late detection, API authentication");
-  displayReady();
+
+  connectToWiFi();
+  deviceId = getDeviceId();
+  uiReady();
 }
 
 void loop() {
-  // Send heartbeat every 30 seconds
-  if (wifiConnected && serverConnected && (millis() - lastHeartbeat > 30000)) {
+  // Always advance animations
+  anim.update();
+
+  if (millis() - lastStatusUpdate > STATUS_UPDATE_MS) {
+    uiStatus();
+    lastStatusUpdate = millis();
+  }
+
+  if (wifiConnected && serverConnected && millis() - lastHeartbeat > HEARTBEAT_MS) {
     sendHeartbeat();
     lastHeartbeat = millis();
   }
-  
-  // Check PIR sensor for motion detection
-  if (digitalRead(PIR_PIN) == HIGH && !pirTriggered) {
-    pirTriggered = true;
-    systemActive = true;
-    lastMotionTime = millis();
-    
-    displayScanMessage();
-    Serial.println("👋 Motion detected - Enhanced RFID scanner activated");
+
+  if (millis() - lastRfidCheck > 15000) {
+    byte v = mfrc522.PCD_ReadRegister(mfrc522.VersionReg);
+    bool ok = (v != 0x00 && v != 0xFF);
+    if (ok != rfidConnected) {
+      rfidConnected = ok;
+      Serial.println(rfidConnected ? "✅ RFID reconnected" : "❌ RFID disconnected");
+    }
+    lastRfidCheck = millis();
   }
-  
-  // RFID scanning window (12 seconds after motion)
-  if (systemActive && (millis() - lastMotionTime < rfidActiveWindow)) {
+
+  if (digitalRead(PIR_PIN) == HIGH && !pirTriggered) {
+    pirTriggered = true; systemActive = true; lastMotionTime = millis();
+    uiMotion();
+    Serial.println("👋 Motion detected - RFID active");
+  }
+
+  if (systemActive && (millis() - lastMotionTime) < MOTION_MS && rfidConnected) {
     if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) {
-      String rfidUID = getRFIDString();
-      
-      // Prevent duplicate scans (3-second cooldown)
-      if (rfidUID != lastCardUID || (millis() - lastCardTime > 3000)) {
-        processEnhancedAttendance(rfidUID);
-        lastCardUID = rfidUID;
+      String uid = getRFIDString();
+      if (uid != lastCardUID || millis() - lastCardTime > COOLDOWN_MS) {
+        Serial.println("📝 UID: " + uid);
+        processAttendance(uid);
+        lastCardUID = uid;
         lastCardTime = millis();
         dailyScans++;
       } else {
-        Serial.println("⚠️ Duplicate card scan ignored (cooldown active)");
-        displayDuplicate();
-        delay(1000);
+        uiDuplicate();
+        buzzerFail();
       }
-      
       mfrc522.PICC_HaltA();
+      mfrc522.PCD_StopCrypto1();
       systemActive = false;
       pirTriggered = false;
     }
-  } else if (systemActive) {
-    // Timeout - no card detected within 12 seconds
+  } else if (systemActive && (millis() - lastMotionTime) >= MOTION_MS) {
     systemActive = false;
     pirTriggered = false;
-    displayTimeout();
-    Serial.println("⏰ Scan timeout - returning to ready state");
-    delay(2000);
-    displayReady();
+    uiTimeout();
+    Serial.println("⏰ Scan timeout -> ready");
+    delay(750);
+    uiReady();
   }
-  
-  // Reset PIR trigger when motion stops
-  if (pirTriggered && digitalRead(PIR_PIN) == LOW) {
-    delay(1000); // Debounce
-    if (digitalRead(PIR_PIN) == LOW) {
-      pirTriggered = false;
-    }
-  }
-  
-  delay(100);
-}
 
-void initializeRTC() {
-  if (RTC.begin()) {
-    Serial.println("✅ RTC initialized successfully");
-    rtcInitialized = true;
-    
-    // Set current time (September 12, 2025, 11:15 PM IST)
-    RTCTime startTime(12, Month::SEPTEMBER, 2025, 23, 15, 0, DayOfWeek::FRIDAY, SaveLight::SAVING_TIME_ACTIVE);
-    RTC.setTime(startTime);
-    
-    Serial.println("🕐 RTC time set to: " + getCurrentTime() + " " + getCurrentDate());
-  } else {
-    Serial.println("❌ RTC initialization failed");
-    rtcInitialized = false;
+  if (pirTriggered && digitalRead(PIR_PIN) == LOW && (millis() - lastMotionTime) > 1000) {
+    pirTriggered = false;
   }
+
+  delay(10); // short idle; animations remain smooth
 }
 
 void connectToWiFi() {
-  displayConnecting();
-  Serial.println("📶 Connecting to WiFi network...");
-  
-  // Check for WiFi module
+  uiConnectingWiFi();
+  Serial.println("📶 Connecting WiFi...");
+
   if (WiFi.status() == WL_NO_MODULE) {
-    Serial.println("❌ Communication with WiFi module failed!");
     wifiConnected = false;
+    uiError("WiFi Module", "Not found");
     return;
   }
-  
-  // Attempt to connect to WiFi
+
+  // Looping spinner during attempts
+  startLoadingSpinner();
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    Serial.print("🔄 Attempting to connect to SSID: ");
-    Serial.println(ssid);
-    
+  while (WiFi.status() != WL_CONNECTED && attempts < 12) {
     WiFi.begin(ssid, password);
-    delay(3000);
+    Serial.print("🔄 Attempt "); Serial.print(attempts + 1); Serial.println("/12");
+    waitWithAnim(1500);
     attempts++;
   }
-  
+  stopSpinnerClear();
+
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
-    Serial.println("✅ WiFi Connected Successfully!");
-    Serial.print("📍 Arduino IP Address: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("🖥️ Enhanced Flask Server: http://");
-    Serial.print(serverAddress);
-    Serial.print(":");
-    Serial.println(serverPort);
-    
-    // Sync time with NTP if available
-    syncTimeWithNTP();
+    digitalWrite(RED_LED, LOW);
+    matrix.clear();
+    Serial.println("✅ WiFi connected");
+    Serial.println("📍 IP: " + WiFi.localIP().toString());
+    Serial.println("📶 RSSI: " + String(WiFi.RSSI()) + " dBm");
+
+    if (rtcInitialized) syncTimeWithNTP();
+    delay(200);
+
+    if (testFlaskConnection()) {
+      serverConnected = true;
+      Serial.println("✅ Flask server online");
+    } else {
+      serverConnected = false;
+      Serial.println("❌ Flask server offline");
+    }
   } else {
     wifiConnected = false;
-    Serial.println("❌ WiFi connection failed - running in offline mode");
-    Serial.println("💡 Check WiFi credentials and network availability");
+    uiError("WiFi", "Connection failed");
   }
+}
+
+bool testFlaskConnection() {
+  Serial.println("🧪 Testing Flask connection...");
+  int retries = 0;
+  int statusCode = -1;
+
+  while (retries < 3 && statusCode < 0) {
+    client.beginRequest();
+    client.get("/");
+    client.sendHeader("X-API-Key", apiKey);
+    client.endRequest();
+    statusCode = client.responseStatusCode();
+
+    if (statusCode == -4) {
+      Serial.println("⚠️ Connection lost, retrying... (" + String(retries + 1) + "/3)");
+      waitWithAnim(500);
+      retries++;
+    } else if (statusCode < 0) {
+      Serial.println("⚠️ HTTP error " + String(statusCode) + ", retrying... (" + String(retries + 1) + "/3)");
+      waitWithAnim(500);
+      retries++;
+    }
+  }
+
+  String response = client.responseBody();
+  Serial.print("📥 Status: "); Serial.println(statusCode);
+  if (statusCode == 200) {
+    DynamicJsonDocument doc(512);
+    DeserializationError err = deserializeJson(doc, response);
+    if (!err && doc["status"] == "active") {
+      serverVer = doc["version"].as<String>();
+      Serial.println("✅ API active, version: " + serverVer);
+      return true;
+    } else {
+      Serial.println("⚠️ Unexpected home response, but server reachable");
+      return true;
+    }
+  }
+  Serial.println("❌ Server not reachable or unauthorized");
+  return false;
 }
 
 void syncTimeWithNTP() {
-  if (!wifiConnected || !rtcInitialized) return;
-  
-  Serial.println("🌐 Syncing time with NTP server...");
-  unsigned long epochTime = WiFi.getTime();
-  
-  if (epochTime > 0) {
-    RTCTime timeToSet = RTCTime(epochTime);
-    RTC.setTime(timeToSet);
-    Serial.println("✅ Time synced with NTP server");
-    Serial.println("🕐 Updated time: " + getCurrentTime() + " " + getCurrentDate());
+  unsigned long epoch = WiFi.getTime();
+  if (epoch > 0) {
+    epoch += TZ_OFFSET_SECS;
+    RTCTime t(epoch);
+    RTC.setTime(t);
+    Serial.println("🕐 NTP synced: " + getCurrentTime() + " " + getCurrentDate());
   } else {
-    Serial.println("⚠️ Failed to get NTP time - using manual time setting");
+    Serial.println("⚠️ Failed to get NTP time");
   }
 }
 
-void testEnhancedFlaskConnection() {
-  if (!wifiConnected) return;
-  
-  Serial.println("🧪 Testing Enhanced Flask server connection...");
-  
+void sendHeartbeat() {
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  String macStr = "";
+  for (int i = 0; i < 6; i++) {
+    if (mac[i] < 16) macStr += "0";
+    macStr += String(mac[i], HEX);
+    if (i < 5) macStr += ":";
+  }
+  macStr.toUpperCase();
+
+  DynamicJsonDocument doc(512);
+  doc["device_type"] = "Arduino UNO R4 WiFi";
+  doc["mac_address"] = macStr;
+  doc["uptime"] = millis();
+  doc["daily_scans"] = dailyScans;
+  doc["wifi_rssi"] = WiFi.RSSI();
+  doc["timestamp"] = getCurrentTime();
+
+  String jsonPayload; serializeJson(doc, jsonPayload);
   client.beginRequest();
-  client.get("/");
+  client.post("/api/system/heartbeat");
+  client.sendHeader("Content-Type", "application/json");
   client.sendHeader("X-API-Key", apiKey);
+  client.sendHeader("Content-Length", jsonPayload.length());
+  client.print(jsonPayload);
   client.endRequest();
-  
   int statusCode = client.responseStatusCode();
-  String response = client.responseBody();
-  
-  Serial.println("📡 Server Response:");
-  Serial.println("Status Code: " + String(statusCode));
-  Serial.println("Response: " + response);
-  
+  Serial.print("💓 Heartbeat status: "); Serial.println(statusCode);
+
   if (statusCode == 200) {
-    Serial.println("✅ Enhanced Flask server connection successful!");
-    
-    // Parse JSON response to verify it's our enhanced API
-    DynamicJsonDocument doc(1024);
-    DeserializationError error = deserializeJson(doc, response);
-    
-    if (!error && doc["status"] == "active") {
-      serverConnected = true;
-      serverVersion = doc["version"].as<String>();
-      Serial.println("✅ Enhanced Flask Attendance API verified");
-      Serial.println("📋 API Name: " + String(doc["name"].as<const char*>()));
-      Serial.println("🔢 API Version: " + serverVersion);
-      Serial.println("🆙 Server Uptime: " + String(doc["uptime"].as<const char*>()));
-      Serial.println("🌐 Features: " + String(doc["features"].size()) + " enhanced features");
-    }
-  } else if (statusCode == 401) {
-    Serial.println("❌ API Key authentication failed!");
-    Serial.println("💡 Check your API key in the Flask dashboard");
-    serverConnected = false;
-  } else {
-    Serial.print("❌ Enhanced Flask server connection failed. Status code: ");
-    Serial.println(statusCode);
-    Serial.println("💡 Make sure Enhanced Flask app is running:");
-    Serial.println("   python app.py");
-    serverConnected = false;
+    showAdvancedHeartbeat();
   }
 }
 
-void processEnhancedAttendance(String rfidUID) {
-  Serial.println("📝 Processing RFID UID with Enhanced API: " + rfidUID);
-  
+String getRFIDString() {
+  String uid = "";
+  for (byte i = 0; i < mfrc522.uid.size; i++) {
+    if (mfrc522.uid.uidByte[i] < 0x10) uid += "0";
+    uid += String(mfrc522.uid.uidByte[i], HEX);
+    if (i < mfrc522.uid.size - 1) uid += ":";
+  }
+  uid.toUpperCase();
+  return uid;
+}
+
+void processAttendance(String rfidUID) {
   if (!wifiConnected) {
-    displayError("No WiFi Connection", "Check network settings");
+    uiError("No WiFi", "Check network");
     buzzerFail();
-    Serial.println("❌ Cannot process attendance - no WiFi connection");
-    delay(3000);
-    displayReady();
+    waitWithAnim(1000);
+    digitalWrite(RED_LED, LOW);
+    uiReady();
     return;
   }
-  
   if (!serverConnected) {
-    displayError("Server Error", "API not accessible");
+    uiError("Server Error", "API not accessible");
     buzzerFail();
-    Serial.println("❌ Cannot process attendance - server not connected");
-    delay(3000);
-    displayReady();
+    waitWithAnim(1000);
+    digitalWrite(RED_LED, LOW);
+    uiReady();
     return;
   }
-  
-  // Step 1: Look up student in Enhanced Flask database
+
   String studentData = getStudentFromEnhancedFlask(rfidUID);
   if (studentData == "NOT_FOUND") {
-    displayError("Unknown Card", "Register in dashboard");
-    buzzerFail();
+    uiError("Unknown Card", "Register in dashboard");
+    Serial.println("⚡ Preparing to log unknown card: " + rfidUID);
     logUnknownCardToEnhancedFlask(rfidUID);
-    Serial.println("❌ Unknown card - UID not found in enhanced database");
-    delay(3000);
-    displayReady();
+    buzzerFail();
+    waitWithAnim(1000);
+    digitalWrite(RED_LED, LOW);
+    uiReady();
     return;
   }
-  
   if (studentData == "ERROR") {
-    displayError("Server Error", "Try again later");
+    uiError("Server Error", "Try again later");
     buzzerFail();
-    Serial.println("❌ Server error during student lookup");
-    delay(3000);
-    displayReady();
+    waitWithAnim(1000);
+    digitalWrite(RED_LED, LOW);
+    uiReady();
     return;
   }
-  
-  // Step 2: Parse enhanced student information
+
   DynamicJsonDocument doc(1024);
-  DeserializationError error = deserializeJson(doc, studentData);
-  
-  if (error) {
-    Serial.println("❌ JSON parsing error: " + String(error.c_str()));
-    displayError("Data Error", "Invalid server response");
+  if (deserializeJson(doc, studentData)) {
+    uiError("Data Error", "Invalid server response");
     buzzerFail();
-    delay(3000);
-    displayReady();
+    waitWithAnim(1000);
+    digitalWrite(RED_LED, LOW);
+    uiReady();
     return;
   }
-  
-  // Extract student details
+
   String studentName = doc["name"];
   String regNo = doc["reg_no"];
   String className = doc["class"];
   bool isPresent = doc["is_present"];
-  String currentTime = getCurrentTime();
-  String currentDate = getCurrentDate();
+  String t = getCurrentTime();
+  String d = getCurrentDate();
   String action = isPresent ? "EXIT" : "ENTRY";
-  
-  Serial.println("👤 Student Found: " + studentName + " (" + regNo + ")");
-  Serial.println("📚 Class: " + className);
-  Serial.println("🎯 Action: " + action);
-  Serial.println("🕐 Time: " + currentTime);
-  Serial.println("📅 Date: " + currentDate);
-  
-  // Step 3: Log attendance to Enhanced Flask API
-  String logResponse = logAttendanceToEnhancedFlask(rfidUID, regNo, studentName, className, action, currentTime, currentDate);
-  
+
+  String logResponse = logAttendanceToEnhancedFlask(rfidUID, regNo, studentName, className, action, t, d);
   if (logResponse != "ERROR") {
-    // Parse enhanced response
-    DynamicJsonDocument responseDoc(1024);
-    DeserializationError responseError = deserializeJson(responseDoc, logResponse);
-    
-    bool isLate = false;
-    String warningMessage = "";
-    
-    if (!responseError) {
-      isLate = responseDoc["is_late"] | false;
-      if (responseDoc["warning"]) {
-        warningMessage = responseDoc["warning"].as<String>();
-      }
-    }
-    
-    // Success - show enhanced confirmation
-    if (action == "ENTRY") {
-      if (isLate) {
-        displayLateArrival(studentName, currentTime);
-        Serial.println("⚠️ LATE ENTRY logged for " + studentName + " - " + warningMessage);
+    DynamicJsonDocument resDoc(1024);
+    if (!deserializeJson(resDoc, logResponse)) {
+      bool late = resDoc["is_late"] | false;
+      if (late) {
+        uiLate(studentName, t);
+        buzzerWarning();
       } else {
-        displaySuccess("Welcome " + studentName, "Entry: " + currentTime, className);
-        Serial.println("✅ Entry logged successfully for " + studentName);
+        uiSuccess(studentName, className, regNo, action, t, d);
+        buzzerSuccess();
       }
+      digitalWrite(GREEN_LED, HIGH);
+      waitWithAnim(2000);
+      digitalWrite(GREEN_LED, LOW);
     } else {
-      displaySuccess("Goodbye " + studentName, "Exit: " + currentTime, className);
-      Serial.println("✅ Exit logged successfully for " + studentName);
+      uiError("Server Error", "Failed to save data");
+      buzzerFail();
     }
-    
-    buzzerSuccess();
-    if (isLate) {
-      buzzerWarning(); // Special sound for late arrival
-    }
-    
-    digitalWrite(GREEN_LED, HIGH);
-    delay(3000);
-    digitalWrite(GREEN_LED, LOW);
+    waitWithAnim(750);
+    digitalWrite(RED_LED, LOW);
+    uiReady();
   } else {
-    // Failed to log attendance
-    displayError("Server Error", "Failed to save data");
+    uiError("Server Error", "Failed to save data");
     buzzerFail();
-    Serial.println("❌ Failed to log attendance to Enhanced Flask server");
-    delay(3000);
+    waitWithAnim(750);
+    digitalWrite(RED_LED, LOW);
+    uiReady();
   }
-  
-  displayReady();
 }
 
 String getStudentFromEnhancedFlask(String uid) {
-  Serial.println("🔍 Looking up student with Enhanced API - UID: " + uid);
-  
   String endpoint = "/api/student?uid=" + uid;
-  
-  client.beginRequest();
-  client.get(endpoint);
-  client.sendHeader("X-API-Key", apiKey);
-  client.endRequest();
-  
-  int statusCode = client.responseStatusCode();
-  String response = client.responseBody();
-  
-  Serial.println("📡 Enhanced student lookup response - Status: " + String(statusCode));
-  
+
+  int retries = 0;
+  int statusCode = -1;
+  String response = "";
+
+  while (retries < 2 && statusCode < 0) {
+    client.beginRequest();
+    client.get(endpoint);
+    client.sendHeader("X-API-Key", apiKey);
+    client.endRequest();
+    statusCode = client.responseStatusCode();
+    response = client.responseBody();
+
+    if (statusCode == -4) {
+      Serial.println("⚠️ Student lookup connection lost, retrying... (" + String(retries + 1) + "/2)");
+      waitWithAnim(500);
+      retries++;
+    } else if (statusCode < 0) {
+      Serial.println("⚠️ Student lookup HTTP error " + String(statusCode) + ", retrying... (" + String(retries + 1) + "/2)");
+      waitWithAnim(500);
+      retries++;
+    }
+  }
+
+  Serial.print("📡 Lookup status: "); Serial.println(statusCode);
   if (statusCode == 200) {
     DynamicJsonDocument doc(1024);
-    DeserializationError error = deserializeJson(doc, response);
-    
-    if (!error && doc["found"] == true) {
-      Serial.println("✅ Student found in Enhanced Flask database");
+    if (!deserializeJson(doc, response) && doc["found"] == true) {
       return response;
-    } else {
-      Serial.println("❌ Student not found in Enhanced Flask database");
-      return "NOT_FOUND";
     }
-  } else if (statusCode == 401) {
-    Serial.println("❌ API Key authentication failed");
-    return "ERROR";
-  } else {
-    Serial.println("❌ Enhanced Flask server error during student lookup");
-    return "ERROR";
+    return "NOT_FOUND";
   }
+  if (statusCode == 404 || statusCode == 204) {
+    Serial.println("ℹ️ Student not found (HTTP " + String(statusCode) + ")");
+    return "NOT_FOUND";
+  }
+  Serial.println("❌ Lookup error (HTTP " + String(statusCode) + ")");
+  return "ERROR";
 }
 
 String logAttendanceToEnhancedFlask(String uid, String regNo, String name, String className, String action, String timestamp, String date) {
-  Serial.println("📤 Logging attendance to Enhanced Flask API...");
-  
-  // **FIXED: Get MAC address properly for UNO R4 WiFi**
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  String macAddressStr = "";
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  String macStr = "";
   for (int i = 0; i < 6; i++) {
-    if (mac[i] < 16) macAddressStr += "0";
-    macAddressStr += String(mac[i], HEX);
-    if (i < 5) macAddressStr += ":";
+    if (mac[i] < 16) macStr += "0";
+    macStr += String(mac[i], HEX);
+    if (i < 5) macStr += ":";
   }
-  macAddressStr.toUpperCase();
-  
-  // Prepare enhanced JSON payload
+  macStr.toUpperCase();
+
   DynamicJsonDocument doc(1024);
   doc["rfid_uid"] = uid;
   doc["reg_no"] = regNo;
@@ -453,68 +758,63 @@ String logAttendanceToEnhancedFlask(String uid, String regNo, String name, Strin
   doc["date"] = date;
   doc["device_info"]["type"] = "Arduino UNO R4 WiFi";
   doc["device_info"]["location"] = "Main Entrance";
-  doc["device_info"]["mac_address"] = macAddressStr;
-  
-  String jsonPayload;
-  serializeJson(doc, jsonPayload);
-  
-  Serial.println("📋 Enhanced JSON Payload:");
-  Serial.println(jsonPayload);
-  
-  // Send POST request to Enhanced Flask API
-  client.beginRequest();
-  client.post("/api/attendance/log");
-  client.sendHeader("Content-Type", "application/json");
-  client.sendHeader("X-API-Key", apiKey);
-  client.sendHeader("Content-Length", jsonPayload.length());
-  client.print(jsonPayload);
-  client.endRequest();
-  
-  // Get enhanced response
-  int statusCode = client.responseStatusCode();
-  String response = client.responseBody();
-  
-  Serial.println("📥 Enhanced Flask server response:");
-  Serial.println("Status Code: " + String(statusCode));
-  Serial.println("Response: " + response);
-  
-  if (statusCode == 200) {
-    Serial.println("✅ Attendance successfully logged to Enhanced Flask database");
-    return response;
-  } else if (statusCode == 401) {
-    Serial.println("❌ API Key authentication failed during attendance logging");
-    return "ERROR";
-  } else {
-    Serial.println("❌ Failed to log attendance. Check Enhanced Flask server logs.");
-    return "ERROR";
+  doc["device_info"]["mac_address"] = macStr;
+
+  String jsonPayload; serializeJson(doc, jsonPayload);
+  Serial.println("📤 Log payload: " + jsonPayload);
+
+  int retries = 0;
+  int statusCode = -1;
+  String body = "";
+
+  while (retries < 2 && statusCode < 0) {
+    client.beginRequest();
+    client.post("/api/attendance/log");
+    client.sendHeader("Content-Type", "application/json");
+    client.sendHeader("X-API-Key", apiKey);
+    client.sendHeader("Content-Length", jsonPayload.length());
+    client.print(jsonPayload);
+    client.endRequest();
+    statusCode = client.responseStatusCode();
+    body = client.responseBody();
+
+    if (statusCode == -4) {
+      Serial.println("⚠️ Attendance log connection lost, retrying... (" + String(retries + 1) + "/2)");
+      waitWithAnim(500);
+      retries++;
+    } else if (statusCode < 0) {
+      Serial.println("⚠️ Attendance log HTTP error " + String(statusCode) + ", retrying... (" + String(retries + 1) + "/2)");
+      waitWithAnim(500);
+      retries++;
+    }
   }
+
+  Serial.print("📥 Log status: "); Serial.println(statusCode);
+  Serial.println("📥 Response: " + body);
+  return (statusCode == 200 ? body : "ERROR");
 }
 
 void logUnknownCardToEnhancedFlask(String uid) {
-  Serial.println("⚠️ Logging unknown card to Enhanced Flask API: " + uid);
-  
-  // **FIXED: Get MAC address properly for UNO R4 WiFi**
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  String macAddressStr = "";
+  uint8_t mac[6]; WiFi.macAddress(mac);
+  String macStr = "";
   for (int i = 0; i < 6; i++) {
-    if (mac[i] < 16) macAddressStr += "0";
-    macAddressStr += String(mac[i], HEX);
-    if (i < 5) macAddressStr += ":";
+    if (mac[i] < 16) macStr += "0";
+    macStr += String(mac[i], HEX);
+    if (i < 5) macStr += ":";
   }
-  macAddressStr.toUpperCase();
-  
+  macStr.toUpperCase();
+
   DynamicJsonDocument doc(512);
   doc["rfid_uid"] = uid;
   doc["timestamp"] = getCurrentTime();
   doc["date"] = getCurrentDate();
   doc["device_info"]["type"] = "Arduino UNO R4 WiFi";
   doc["device_info"]["location"] = "Main Entrance";
-  doc["device_info"]["mac_address"] = macAddressStr;
-  
-  String jsonPayload;
-  serializeJson(doc, jsonPayload);
-  
+  doc["device_info"]["mac_address"] = macStr;
+
+  String jsonPayload; serializeJson(doc, jsonPayload);
+  Serial.println("📤 Unknown payload: " + jsonPayload);
+
   client.beginRequest();
   client.post("/api/attendance/unknown");
   client.sendHeader("Content-Type", "application/json");
@@ -522,392 +822,70 @@ void logUnknownCardToEnhancedFlask(String uid) {
   client.sendHeader("Content-Length", jsonPayload.length());
   client.print(jsonPayload);
   client.endRequest();
-  
   int statusCode = client.responseStatusCode();
-  Serial.println("⚠️ Unknown card logged - Status: " + String(statusCode));
-}
+  String body = client.responseBody();
+  Serial.print("⚠️ Unknown card log status: "); Serial.println(statusCode);
+  Serial.println("⚠️ Response: " + body);
 
-void sendHeartbeat() {
-  Serial.println("💓 Sending heartbeat to Enhanced Flask server...");
-  
-  // **FIXED: Get MAC address properly for UNO R4 WiFi**
-  uint8_t mac[6];
-  WiFi.macAddress(mac);
-  String macAddressStr = "";
-  for (int i = 0; i < 6; i++) {
-    if (mac[i] < 16) macAddressStr += "0";
-    macAddressStr += String(mac[i], HEX);
-    if (i < 5) macAddressStr += ":";
+  if (statusCode != 200) {
+    waitWithAnim(300);
+    client.beginRequest();
+    client.post("/api/attendance/unknown");
+    client.sendHeader("Content-Type", "application/json");
+    client.sendHeader("X-API-Key", apiKey);
+    client.sendHeader("Content-Length", jsonPayload.length());
+    client.print(jsonPayload);
+    client.endRequest();
+    int statusCode2 = client.responseStatusCode();
+    String body2 = client.responseBody();
+    Serial.print("⚠️ Unknown card retry status: "); Serial.println(statusCode2);
+    Serial.println("⚠️ Retry response: " + body2);
   }
-  macAddressStr.toUpperCase();
-  
-  DynamicJsonDocument doc(512);
-  doc["device_type"] = "Arduino UNO R4 WiFi";
-  doc["mac_address"] = macAddressStr;
-  doc["uptime"] = millis();
-  doc["daily_scans"] = dailyScans;
-  // **REMOVED: freeMemory() - not supported on renesas architecture**
-  doc["wifi_rssi"] = WiFi.RSSI();
-  doc["timestamp"] = getCurrentTime();
-  
-  String jsonPayload;
-  serializeJson(doc, jsonPayload);
-  
-  client.beginRequest();
-  client.post("/api/system/heartbeat");
-  client.sendHeader("Content-Type", "application/json");
-  client.sendHeader("X-API-Key", apiKey);
-  client.sendHeader("Content-Length", jsonPayload.length());
-  client.print(jsonPayload);
-  client.endRequest();
-  
-  int statusCode = client.responseStatusCode();
-  if (statusCode == 200) {
-    Serial.println("💓 Heartbeat sent successfully");
-  }
-}
-
-// **REMOVED: freeMemory() function - not supported on renesas architecture**
-// The sbrk() function is not available on Arduino UNO R4 WiFi (renesas architecture)
-
-// Utility Functions
-String getRFIDString() {
-  String content = "";
-  for (byte i = 0; i < mfrc522.uid.size; i++) {
-    content.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? "0" : ""));
-    content.concat(String(mfrc522.uid.uidByte[i], HEX));
-    if (i != mfrc522.uid.size - 1) content.concat(":");
-  }
-  content.toUpperCase();
-  return content;
 }
 
 String getCurrentTime() {
   if (rtcInitialized) {
-    RTCTime currentTime;
-    RTC.getTime(currentTime);
-    
-    char timeString[9];
-    sprintf(timeString, "%02d:%02d:%02d", 
-            currentTime.getHour(), 
-            currentTime.getMinutes(), 
-            currentTime.getSeconds());
-    return String(timeString);
-  } else {
-    // Fallback to millis-based time
-    unsigned long uptime = millis();
-    unsigned long seconds = (uptime / 1000) % 60;
-    unsigned long minutes = (uptime / 60000) % 60;
-    unsigned long hours = (uptime / 3600000) % 24;
-    
-    char timeString[9];
-    sprintf(timeString, "%02lu:%02lu:%02lu", hours, minutes, seconds);
-    return String(timeString);
+    RTCTime now; RTC.getTime(now);
+    char buf[9]; sprintf(buf, "%02d:%02d:%02d", now.getHour(), now.getMinutes(), now.getSeconds());
+    return String(buf);
   }
+  unsigned long up = millis();
+  char buf[9]; sprintf(buf, "%02lu:%02lu:%02lu", (up/3600000)%24, (up/60000)%60, (up/1000)%60);
+  return String(buf);
 }
 
 String getCurrentDate() {
   if (rtcInitialized) {
-    RTCTime currentTime;
-    RTC.getTime(currentTime);
-    
-    char dateString[11];
-    sprintf(dateString, "%04d-%02d-%02d", 
-            currentTime.getYear(), 
-            Month2int(currentTime.getMonth()), 
-            currentTime.getDayOfMonth());
-    return String(dateString);
-  } else {
-    return "2025-09-12"; // Current date
+    RTCTime now; RTC.getTime(now);
+    int y = now.getYear();
+    int m = static_cast<int>(now.getMonth());
+    int d = now.getDayOfMonth();
+    if (m < 1) m = 1;
+    if (m > 12) m = 12;
+    char buf[11]; sprintf(buf, "%04d-%02d-%02d", y, m+1, d);
+    return String(buf);
   }
+  return "2025-09-26";
 }
 
-// Enhanced Display Functions
-void displayWelcome() {
-  tft.fillScreen(ILI9341_BLACK);
-  tft.setTextColor(ILI9341_CYAN);
-  tft.setTextSize(2);
-  tft.setCursor(20, 30);
-  tft.println("Enhanced");
-  tft.setCursor(20, 60);
-  tft.println("Attendance");
-  tft.setCursor(40, 90);
-  tft.println("System v2.0");
-  
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(1);
-  tft.setCursor(30, 130);
-  tft.println("Arduino UNO R4 WiFi");
-  tft.setCursor(25, 150);
-  tft.println("Enhanced Flask Backend");
-  tft.setCursor(40, 170);
-  tft.println("Real-time Sync");
-  tft.setCursor(35, 190);
-  tft.println("API Authentication");
-  tft.setCursor(70, 210);
-  tft.println("Initializing...");
-}
-
-void displayConnecting() {
-  tft.fillScreen(ILI9341_BLACK);
-  tft.setTextColor(ILI9341_YELLOW);
-  tft.setTextSize(2);
-  tft.setCursor(30, 70);
-  tft.println("Connecting");
-  tft.setCursor(50, 100);
-  tft.println("to WiFi...");
-  
-  tft.setTextSize(1);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setCursor(40, 140);
-  tft.println("ESP32-S3 WiFi Module");
-  tft.setCursor(45, 160);
-  tft.println("Enhanced Security");
-  tft.setCursor(60, 180);
-  tft.println("Please wait...");
-}
-
-void displayReady() {
-  tft.fillScreen(ILI9341_GREEN);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(3);
-  tft.setCursor(60, 25);
-  tft.println("READY");
-  
-  // Show current time and date
-  tft.setTextSize(2);
-  tft.setCursor(50, 65);
-  tft.println(getCurrentTime());
-  tft.setTextSize(1);
-  tft.setCursor(70, 90);
-  tft.println(getCurrentDate());
-  
-  tft.setCursor(40, 115);
-  tft.println("Approach the reader");
-  tft.setCursor(60, 135);
-  tft.println("with your card");
-  
-  // Enhanced status indicators
-  tft.setCursor(5, 160);
-  if (wifiConnected) {
-    tft.setTextColor(ILI9341_WHITE);
-    tft.println("WiFi: Connected");
-  } else {
-    tft.setTextColor(ILI9341_RED);
-    tft.println("WiFi: Offline");
-  }
-  
-  tft.setCursor(5, 180);
-  if (serverConnected) {
-    tft.setTextColor(ILI9341_WHITE);
-    tft.println("Server: Online v" + serverVersion);
-  } else {
-    tft.setTextColor(ILI9341_RED);
-    tft.println("Server: Offline");
-  }
-  
-  tft.setCursor(5, 200);
-  tft.setTextColor(ILI9341_WHITE);
-  if (rtcInitialized) {
-    tft.println("Clock: NTP Synced");
-  } else {
-    tft.setTextColor(ILI9341_YELLOW);
-    tft.println("Clock: Estimated");
-  }
-  
-  tft.setCursor(5, 220);
-  tft.setTextColor(ILI9341_CYAN);
-  tft.println("Scans Today: " + String(dailyScans));
-}
-
-void displayScanMessage() {
-  tft.fillScreen(ILI9341_BLUE);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(50, 50);
-  tft.println("Motion");
-  tft.setCursor(40, 80);
-  tft.println("Detected");
-  
-  tft.setTextSize(1);
-  tft.setCursor(50, 120);
-  tft.println("Please show your");
-  tft.setCursor(70, 140);
-  tft.println("RFID card now");
-  
-  tft.setCursor(40, 170);
-  tft.println("Enhanced scanning...");
-  tft.setCursor(35, 190);
-  tft.println("12 second window");
-}
-
-void displaySuccess(String line1, String line2, String className) {
-  tft.fillScreen(ILI9341_GREEN);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(50, 20);
-  tft.println("SUCCESS");
-  
-  tft.setTextSize(1);
-  tft.setCursor(10, 60);
-  tft.println(line1);
-  tft.setCursor(10, 80);
-  tft.println(line2);
-  tft.setCursor(10, 100);
-  tft.println("Class: " + className);
-  tft.setCursor(10, 120);
-  tft.println("Date: " + getCurrentDate());
-  
-  tft.setCursor(10, 150);
-  if (wifiConnected && serverConnected) {
-    tft.println("Synced to Enhanced API");
-    tft.setCursor(10, 170);
-    tft.println("Real-time dashboard updated");
-  } else {
-    tft.println("Stored locally only");
-  }
-  
-  // Enhanced success animation
-  tft.setTextColor(ILI9341_YELLOW);
-  tft.setTextSize(4);
-  tft.setCursor(270, 180);
-  tft.println("✓");
-}
-
-void displayLateArrival(String studentName, String arrivalTime) {
-  tft.fillScreen(ILI9341_ORANGE);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(30, 20);
-  tft.println("LATE ARRIVAL");
-  
-  tft.setTextSize(1);
-  tft.setCursor(10, 60);
-  tft.println("Student: " + studentName);
-  tft.setCursor(10, 80);
-  tft.println("Arrival: " + arrivalTime);
-  tft.setCursor(10, 100);
-  tft.println("Date: " + getCurrentDate());
-  
-  tft.setTextColor(ILI9341_YELLOW);
-  tft.setCursor(10, 130);
-  tft.println("⚠️ AFTER 9:15 AM");
-  tft.setCursor(10, 150);
-  tft.println("Parent notification sent");
-  
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setCursor(10, 180);
-  tft.println("Recorded in system");
-  
-  // Late arrival warning symbol
-  tft.setTextColor(ILI9341_RED);
-  tft.setTextSize(3);
-  tft.setCursor(270, 180);
-  tft.println("⚠");
-}
-
-void displayError(String message, String details) {
-  tft.fillScreen(ILI9341_RED);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(70, 50);
-  tft.println("ERROR");
-  
-  tft.setTextSize(1);
-  tft.setCursor(30, 90);
-  tft.println(message);
-  tft.setCursor(20, 110);
-  tft.println(details);
-  
-  if (message == "Unknown Card") {
-    tft.setCursor(15, 140);
-    tft.println("Register this card in");
-    tft.setCursor(25, 160);
-    tft.println("Enhanced Flask Dashboard");
-    tft.setCursor(40, 180);
-    tft.println("http://" + String(serverAddress) + ":5000");
-  } else if (message.indexOf("WiFi") >= 0) {
-    tft.setCursor(25, 140);
-    tft.println("Check network settings");
-    tft.setCursor(35, 160);
-    tft.println("Restart if needed");
-  } else {
-    tft.setCursor(20, 140);
-    tft.println("Check Enhanced Flask");
-    tft.setCursor(30, 160);
-    tft.println("server status and");
-    tft.setCursor(40, 180);
-    tft.println("API key validity");
-  }
-  
-  digitalWrite(RED_LED, HIGH);
-  delay(2000);
-  digitalWrite(RED_LED, LOW);
-}
-
-void displayDuplicate() {
-  tft.fillScreen(ILI9341_YELLOW);
-  tft.setTextColor(ILI9341_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(40, 90);
-  tft.println("DUPLICATE");
-  tft.setCursor(70, 120);
-  tft.println("SCAN");
-  tft.setTextSize(1);
-  tft.setCursor(50, 160);
-  tft.println("Please wait 3 seconds");
-  tft.setCursor(60, 180);
-  tft.println("between scans");
-}
-
-void displayTimeout() {
-  tft.fillScreen(ILI9341_ORANGE);
-  tft.setTextColor(ILI9341_WHITE);
-  tft.setTextSize(2);
-  tft.setCursor(50, 70);
-  tft.println("TIMEOUT");
-  
-  tft.setTextSize(1);
-  tft.setCursor(50, 110);
-  tft.println("No card detected");
-  tft.setCursor(40, 130);
-  tft.println("within 12 seconds");
-  tft.setCursor(50, 160);
-  tft.println("Returning to ready");
-  tft.setCursor(60, 180);
-  tft.println("state...");
-}
-
-// Enhanced Buzzer Functions
+// Buzzer helpers (can be converted to non-blocking if desired)
 void buzzerSuccess() {
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(100);
-  digitalWrite(BUZZER_PIN, LOW);
-  delay(50);
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(100);
-  digitalWrite(BUZZER_PIN, LOW);
-  delay(50);
-  digitalWrite(BUZZER_PIN, HIGH);
-  delay(100);
+  digitalWrite(BUZZER_PIN, HIGH); delay(100);
+  digitalWrite(BUZZER_PIN, LOW);  delay(50);
+  digitalWrite(BUZZER_PIN, HIGH); delay(100);
+  digitalWrite(BUZZER_PIN, LOW);  delay(50);
+  digitalWrite(BUZZER_PIN, HIGH); delay(100);
   digitalWrite(BUZZER_PIN, LOW);
 }
-
 void buzzerFail() {
   for (int i = 0; i < 3; i++) {
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(300);
-    digitalWrite(BUZZER_PIN, LOW);
-    delay(200);
+    digitalWrite(BUZZER_PIN, HIGH); delay(300);
+    digitalWrite(BUZZER_PIN, LOW);  delay(200);
   }
 }
-
 void buzzerWarning() {
-  // Special sound for late arrival
   for (int i = 0; i < 5; i++) {
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(150);
-    digitalWrite(BUZZER_PIN, LOW);
-    delay(100);
+    digitalWrite(BUZZER_PIN, HIGH); delay(150);
+    digitalWrite(BUZZER_PIN, LOW);  delay(100);
   }
 }
