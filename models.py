@@ -47,6 +47,7 @@ class AttendanceLog(db.Model):
     timestamp = db.Column(db.Time, nullable=False)
     date = db.Column(db.Date, nullable=False, default=date.today, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_late = db.Column(db.Boolean, default=False, nullable=False)
     
     def to_dict(self):
         return {
@@ -125,6 +126,51 @@ class SystemLog(db.Model):
             'timestamp': self.timestamp.isoformat() if self.timestamp else None
         }
 
+
+class ApiKey(db.Model):
+    """API Key model for Arduino authentication"""
+    __tablename__ = 'api_keys'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(100), default='Arduino Device Key')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.Integer, db.ForeignKey('admin_users.id'))
+    is_active = db.Column(db.Boolean, default=True)
+    last_used = db.Column(db.DateTime)
+    usage_count = db.Column(db.Integer, default=0)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'key': f"{self.key[:8]}{'*' * (len(self.key) - 8)}",  # Masked key
+            'name': self.name,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'is_active': self.is_active,
+            'last_used': self.last_used.isoformat() if self.last_used else None,
+            'usage_count': self.usage_count
+        }
+    
+    def __repr__(self):
+        return f'<ApiKey {self.key[:8]}...>'
+
+    @staticmethod
+    def get_active_key():
+        """Get the current active API key"""
+        return ApiKey.query.filter_by(is_active=True).first()
+    
+    @staticmethod
+    def validate_key(provided_key):
+        """Validate if provided key is valid and active"""
+        key = ApiKey.query.filter_by(key=provided_key, is_active=True).first()
+        if key:
+            # Update usage statistics
+            key.last_used = datetime.utcnow()
+            key.usage_count += 1
+            db.session.commit()
+            return True
+        return False
 # Update AttendanceLog model to include late arrival tracking
 # Add this field to your existing AttendanceLog model:
 # is_late = db.Column(db.Boolean, default=False)
+
