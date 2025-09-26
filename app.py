@@ -3,7 +3,7 @@ from flask_cors import CORS
 from flask_mail import Mail, Message
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from sqlalchemy import func
-from models import db, Student, AttendanceLog, UnknownCard, AdminUser, SystemLog
+from models import db, Student, AttendanceLog, UnknownCard, AdminUser, SystemLog, ApiKey
 from config import Config
 import schedule
 import time
@@ -52,10 +52,25 @@ def api_key_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
-        if not api_key or api_key != app.config.get('API_KEY', 'default-api-key'):
-            return jsonify({'error': 'Invalid API key'}), 401
+        
+        if not api_key:
+            return jsonify({
+                'success': False,
+                'error': 'API key required',
+                'message': 'Provide X-API-Key header or api_key parameter'
+            }), 401
+        
+        # Validate API key from database
+        if not ApiKey.validate_key(api_key):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid or inactive API key',
+                'message': 'Check your API key or regenerate a new one'
+            }), 401
+        
         return f(*args, **kwargs)
     return decorated_function
+
 
 def create_tables():
     """Create database tables with error handling"""
@@ -69,7 +84,8 @@ def create_tables():
                 if db_dir and not os.path.exists(db_dir):
                     os.makedirs(db_dir)
                     print(f"Created database directory: {db_dir}")
-            
+                    
+              
             db.create_all()
             print("✅ Database tables created successfully!")
             
@@ -83,6 +99,42 @@ def create_tables():
     except Exception as e:
         print(f"❌ Error creating database: {e}")
         print("💡 Make sure the database directory exists and is writable")
+
+
+
+def create_api_key_table():
+    """Create API key table if it doesn't exist"""
+    try:
+        with app.app_context():
+            # Create the table
+            db.create_all()
+            
+            # Create initial API key if none exists
+            if not ApiKey.query.first():
+                initial_key = secrets.token_urlsafe(32)
+                api_key = ApiKey(
+                    key=initial_key,
+                    name='Initial Arduino Device Key',
+                    is_active=True
+                )
+                db.session.add(api_key)
+                db.session.commit()
+                
+                print(f"✅ Initial API key created: {initial_key}")
+                print("🔧 Update your Arduino code with this API key")
+                
+        return True
+    except Exception as e:
+        print(f"❌ Error creating API key table: {e}")
+        return False
+
+# Call this in your app initialization
+if __name__ == '__main__':
+    create_tables()
+    create_api_key_table()  # Add this line
+    
+    # ... rest of your app startup code
+
 
 def create_default_admin():
     """Create default admin user if none exists"""
@@ -953,14 +1005,17 @@ def dashboard():
                     <canvas id="attendanceChart"></canvas>
                 </div>
                 
-                <div class="card">
-                    <h3>📊 System Status</h3>
-                    <p><strong>Server Status:</strong> <span class="status online">ONLINE</span></p>
-                    <p><strong>Database:</strong> <span class="status online">CONNECTED</span></p>
-                    <p><strong>Arduino Integration:</strong> <span class="status online">READY</span></p>
-                    <p><strong>Last Updated:</strong> <span id="timestamp">Loading...</span></p>
-                    <p><strong>System Uptime:</strong> <span id="systemUptime">Loading...</span></p>
-                </div>
+               <div class="card">
+    <h3>📊 System Status</h3>
+    <p><strong>Server Status:</strong> <span class="status online">ONLINE</span></p>
+    <p><strong>Database:</strong> <span class="status online">CONNECTED</span></p>
+    <p><strong>Arduino Integration:</strong> <span class="status online">READY</span></p>
+    <!-- These are the critical elements -->
+    <p><strong>Last Updated:</strong> <span id="timestamp">Loading...</span></p>
+    <p><strong>Page Uptime:</strong> <span id="systemUptime">Loading...</span></p>
+    <p><strong>Server Uptime:</strong> <span id="systemUptimeDetails">Loading...</span></p>
+</div>
+
                 
                 <div class="card">
                     <h3>🔄 Quick Actions</h3>
@@ -969,7 +1024,78 @@ def dashboard():
                     <button class="btn btn-warning" onclick="sendAbsentAlerts()">📧 Send Absent Alerts</button>
                     <button class="btn btn-secondary" onclick="exportData()">📥 Export Data</button>
                 </div>
+
+                <!-- Unknown Cards Section -->
+<div class="card">
+  <h3>Unrecognized RFID Cards</h3>
+  <p>These cards were scanned but not yet registered. Click <b>Register</b> to add them as students.</p>
+  <div class="alert alert-info" id="unknownCardsAlert" style="display:none;"></div>
+  <div class="table-container">
+    <table id="unknownCardsTable" class="table hover">
+      <thead>
+        <tr>
+          <th>RFID UID</th>
+          <th>Date</th>
+          <th>Time</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td colspan="4" style="text-align:center; padding:40px;">
+            <div class="spinner"></div> Loading unrecognized cards...
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <button class="btn" onclick="loadUnknownCards()" style="margin-top:15px;">
+      Refresh Unrecognized Cards
+    </button>
+  </div>
+</div>
+
+<!-- Student Registration Modal -->
+<div id="registerModal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Register New Student</h3>
+      <button class="close" onclick="closeRegisterModal()">&times;</button>
+    </div>
+    <div class="alert alert-success" id="registerSuccessAlert" style="display:none;"></div>
+    <div class="alert alert-danger" id="registerErrorAlert" style="display:none;"></div>
+    <form id="registerStudentForm" onsubmit="return registerStudent(event)">
+      <input type="hidden" id="registerRfidUid">
+      <div class="form-group">
+        <label for="registerRegNo">Registration Number</label>
+        <input type="text" class="form-control" id="registerRegNo" required>
+      </div>
+      <div class="form-group">
+        <label for="registerName">Full Name</label>
+        <input type="text" class="form-control" id="registerName" required>
+      </div>
+      <div class="form-group">
+        <label for="registerClass">Class</label>
+        <input type="text" class="form-control" id="registerClass" required>
+      </div>
+      <div class="form-group">
+        <label for="registerParentEmail">Parent Email</label>
+        <input type="email" class="form-control" id="registerParentEmail" required>
+      </div>
+      <div class="form-group">
+        <label for="registerParentPhone">Parent Phone (Optional)</label>
+        <input type="tel" class="form-control" id="registerParentPhone">
+      </div>
+      <div style="text-align:right; margin-top:20px;">
+        <button type="button" class="btn btn-secondary" onclick="closeRegisterModal()">Cancel</button>
+        <button type="submit" class="btn btn-success">Register Student</button>
+      </div>
+    </form>
+  </div>
+</div>
+
             </div>
+            
+        
             
             <!-- Students Tab -->
             <div id="students" class="tab-content">
@@ -1243,20 +1369,24 @@ def dashboard():
                 </div>
                 
                 <div class="card">
-                    <h3>🎯 API Configuration</h3>
-                    <p><strong>Server IP:</strong> <span id="serverIP">Getting IP...</span></p>
-                    <p><strong>API Endpoint:</strong> http://<span id="apiEndpoint">loading</span>:5000/api/</p>
-                    <p><strong>API Key:</strong> <code id="apiKeyDisplay">••••••••••••••••</code> 
-                        <button class="btn btn-sm" onclick="toggleApiKey()">👁️ Show/Hide</button>
-                    </p>
-                    
-                    <div style="margin-top: 15px;">
-                        <button class="btn btn-secondary" onclick="testConnection()">🧪 Test API</button>
-                        <button class="btn btn-warning" onclick="regenerateApiKey()">🔄 Regenerate API Key</button>
-                    </div>
-                    
-                    <div id="connectionResult" style="margin-top: 15px;"></div>
-                </div>
+    <h3>🎯 API Configuration</h3>
+    <p><strong>Server IP:</strong> <span id="serverIP">Getting IP...</span></p>
+    <p><strong>API Endpoint:</strong> http://<span id="apiEndpoint">loading</span>:5000/api/</p>
+    <p><strong>Current API Key:</strong> 
+        <code id="apiKeyDisplay">Loading...</code>
+        <span id="apiKeyStatus"></span>
+    </p>
+    <div id="apiKeyDetails" style="margin-top: 10px;"></div>
+    
+    <div style="margin-top: 15px;">
+        <button class="btn btn-secondary" onclick="testConnection()">🧪 Test API</button>
+        <button class="btn btn-warning" onclick="regenerateApiKey()">🔄 Regenerate API Key</button>
+        <button class="btn btn-info" onclick="loadCurrentApiKey()">🔄 Refresh Key Info</button>
+    </div>
+    
+    <div id="connectionResult" style="margin-top: 15px;"></div>
+</div>
+
             </div>
         </div>
         
@@ -1346,6 +1476,7 @@ def dashboard():
             </div>
         </div>
         
+
         <!-- Import CSV Modal -->
         <div id="importModal" class="modal">
             <div class="modal-content">
@@ -1379,1113 +1510,1575 @@ def dashboard():
         </div>
         
         <script>
-            // Global variables
-            let socket;
-            let students = [];
-            let attendanceLogs = [];
-            let currentEditStudentId = null;
-            let currentDeleteStudentId = null;
-            let attendanceChart;
-            let trendsChart;
-            let classComparisonChart;
-            let apiKeyVisible = false;
-            
-            // Initialize enhanced dashboard
-            document.addEventListener('DOMContentLoaded', function() {
-                initializeSocket();
-                initializeCharts();
-                loadEnhancedDashboard();
-                setTodayDate();
-                getServerIP();
-                loadSystemStats();
-                
-                // Update every 30 seconds
-                setInterval(updateLiveStats, 30000);
-                setInterval(updateTimestamp, 1000);
-            });
-            
-            // Socket.IO for real-time updates
-            function initializeSocket() {
-                socket = io();
-                
-                socket.on('connect', function() {
-                    console.log('Connected to server');
-                    showNotification('Connected to live updates', 'success');
-                });
-                
-                socket.on('attendance_update', function(data) {
-                    updateLiveDisplay(data);
-                    updateStatsRealTime();
-                });
-                
-                socket.on('system_alert', function(data) {
-                    showNotification(data.message, data.type);
-                });
-                
-                socket.on('disconnect', function() {
-                    console.log('Disconnected from server');
-                    showNotification('Disconnected from live updates', 'warning');
-                });
-            }
-            
-            // Initialize charts
-            function initializeCharts() {
-                // Attendance Overview Chart
-                const ctx1 = document.getElementById('attendanceChart').getContext('2d');
-                attendanceChart = new Chart(ctx1, {
-                    type: 'line',
-                    data: {
-                        labels: [],
-                        datasets: [{
-                            label: 'Daily Attendance Rate',
-                            data: [],
-                            borderColor: '#2196F3',
-                            backgroundColor: 'rgba(33, 150, 243, 0.1)',
-                            tension: 0.4,
-                            fill: true
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            title: {
-                                display: true,
-                                text: 'Attendance Trends (Last 7 Days)'
-                            },
-                            legend: {
-                                display: false
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                max: 100,
-                                ticks: {
-                                    callback: function(value) {
-                                        return value + '%';
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-                
-                // Trends Chart for Analytics
-                const ctx2 = document.getElementById('trendsChart').getContext('2d');
-                trendsChart = new Chart(ctx2, {
-                    type: 'bar',
-                    data: {
-                        labels: [],
-                        datasets: [{
-                            label: 'Present',
-                            data: [],
-                            backgroundColor: '#4CAF50'
-                        }, {
-                            label: 'Absent',
-                            data: [],
-                            backgroundColor: '#f44336'
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            title: {
-                                display: true,
-                                text: 'Attendance Analytics'
-                            }
-                        }
-                    }
-                });
-                
-                // Class Comparison Chart
-                const ctx3 = document.getElementById('classComparisonChart').getContext('2d');
-                classComparisonChart = new Chart(ctx3, {
-                    type: 'doughnut',
-                    data: {
-                        labels: [],
-                        datasets: [{
-                            data: [],
-                            backgroundColor: [
-                                '#2196F3', '#4CAF50', '#ff9800', '#f44336', 
-                                '#9c27b0', '#00bcd4', '#ffeb3b', '#795548'
-                            ]
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            title: {
-                                display: true,
-                                text: 'Class-wise Attendance Distribution'
-                            }
-                        }
-                    }
-                });
-            }
-            
-            // Dark mode toggle
-            function toggleTheme() {
-                document.body.classList.toggle('dark-mode');
-                const isDark = document.body.classList.contains('dark-mode');
-                localStorage.setItem('darkMode', isDark);
-                
-                // Update chart colors for dark mode
-                updateChartTheme(isDark);
-            }
-            
-            function updateChartTheme(isDark) {
-                const textColor = isDark ? '#ffffff' : '#333333';
-                const gridColor = isDark ? '#555555' : '#e0e0e0';
-                
-                const charts = [attendanceChart, trendsChart, classComparisonChart];
-                charts.forEach(chart => {
-                    if (chart) {
-                        chart.options.plugins.title.color = textColor;
-                        if (chart.options.scales) {
-                            if (chart.options.scales.x) chart.options.scales.x.ticks.color = textColor;
-                            if (chart.options.scales.y) chart.options.scales.y.ticks.color = textColor;
-                            if (chart.options.scales.x) chart.options.scales.x.grid.color = gridColor;
-                            if (chart.options.scales.y) chart.options.scales.y.grid.color = gridColor;
-                        }
-                        chart.update();
-                    }
-                });
-            }
-            
-            // Load saved theme preference
-            if (localStorage.getItem('darkMode') === 'true') {
-                document.body.classList.add('dark-mode');
-            }
-            
-            // Enhanced tab switching
-            function showTab(tabName) {
-                // Hide all tabs
-                document.querySelectorAll('.tab-content').forEach(tab => {
-                    tab.classList.remove('active');
-                });
-                
-                // Remove active from all nav tabs
-                document.querySelectorAll('.nav-tab').forEach(tab => {
-                    tab.classList.remove('active');
-                });
-                
-                // Show selected tab
-                document.getElementById(tabName).classList.add('active');
-                event.target.classList.add('active');
-                
-                // Load tab-specific data
-                switch(tabName) {
-                    case 'students':
-                        loadStudents();
-                        loadClassOptions();
-                        break;
-                    case 'attendance':
-                        loadAttendanceLogs();
-                        loadClassOptions();
-                        break;
-                    case 'analytics':
-                        loadAnalyticsData();
-                        loadClassOptions();
-                        break;
-                    case 'system':
-                        loadSystemStats();
-                        break;
-                    case 'overview':
-                        loadEnhancedDashboard();
-                        break;
-                }
-            }
-            
-            // Update timestamp
-            // Simple fix - just update the existing function
-function updateTimestamp() {
-    const now = new Date();
-    const timestampElement = document.getElementById('timestamp');
-    const uptimeElement = document.getElementById('systemUptime');
-    
-    if (timestampElement) {
-        timestampElement.textContent = now.toLocaleString();
-    }
-    
-    if (uptimeElement) {
-        if (!window.startTime) {
-            window.startTime = new Date();
+        // Global variables
+let socket;
+let students = [];
+let attendanceLogs = [];
+let currentEditStudentId = null;
+let currentDeleteStudentId = null;
+let attendanceChart;
+let trendsChart;
+let classComparisonChart;
+let apiKeyVisible = false;
+
+// Initialize enhanced dashboard
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('Dashboard initialization started...');
+    initializeDashboard();
+});
+
+// Main initialization function
+function initializeDashboard() {
+    try {
+        // Initialize timestamp updates first
+        initializeTimestampUpdates();
+        
+        // Initialize other components
+        initializeSocket();
+        setTimeout(() => initializeCharts(), 100); // Delay to ensure DOM is ready
+        loadEnhancedDashboard();
+        setTodayDate();
+        getServerIP();
+        loadSystemStats();
+        loadCurrentApiKey();
+        loadNotificationSettings();
+        
+        // Apply saved theme
+        if (localStorage.getItem('darkMode') === 'true') {
+            document.body.classList.add('dark-mode');
         }
         
-        const elapsed = new Date() - window.startTime;
-        const hours = Math.floor(elapsed / 3600000);
-        const minutes = Math.floor((elapsed % 3600000) / 60000);
-        const seconds = Math.floor((elapsed % 60000) / 1000);
-        
-        uptimeElement.textContent = `${hours}h ${minutes}m ${seconds}s`;
+        console.log('✅ Dashboard initialization completed');
+    } catch (error) {
+        console.error('Dashboard initialization error:', error);
     }
 }
 
-// Make sure this runs on page load
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
-        updateTimestamp();
-        setInterval(updateTimestamp, 1000);
-    });
-} else {
-    updateTimestamp();
-    setInterval(updateTimestamp, 1000);
+// Socket.IO for real-time updates
+function initializeSocket() {
+    try {
+        socket = io();
+        
+        socket.on('connect', function() {
+            console.log('Connected to server');
+            showNotification('Connected to live updates', 'success');
+        });
+        
+        socket.on('attendance_update', function(data) {
+            updateLiveDisplay(data);
+            updateStatsRealTime();
+        });
+        
+        socket.on('system_alert', function(data) {
+            showNotification(data.message, data.type);
+        });
+        
+        socket.on('disconnect', function() {
+            console.log('Disconnected from server');
+            showNotification('Disconnected from live updates', 'warning');
+        });
+    } catch (error) {
+        console.error('Socket initialization error:', error);
+    }
 }
 
-            
-            function getSystemUptime() {
-                // This would normally come from the server
-                const startTime = new Date(Date.now() - Math.random() * 86400000); // Simulated
-                const uptime = Date.now() - startTime.getTime();
-                const hours = Math.floor(uptime / 3600000);
-                const minutes = Math.floor((uptime % 3600000) / 60000);
-                return `${hours}h ${minutes}m`;
-            }
-            
-            // Set today's date in date inputs
-            function setTodayDate() {
-                const today = new Date().toISOString().split('T')[0];
-                const dateInputs = ['dateFilter', 'reportDate', 'notificationDate', 'analyticsEndDate'];
-                dateInputs.forEach(id => {
-                    const element = document.getElementById(id);
-                    if (element) element.value = today;
-                });
-                
-                // Set start date to 7 days ago for analytics
-                const weekAgo = new Date();
-                weekAgo.setDate(weekAgo.getDate() - 7);
-                const startDate = document.getElementById('analyticsStartDate');
-                if (startDate) startDate.value = weekAgo.toISOString().split('T')[0];
-            }
-            
-            // Load enhanced dashboard data
-            async function loadEnhancedDashboard() {
-                try {
-                    const [studentsRes, reportRes, weeklyRes] = await Promise.all([
-                        fetch('/api/students'),
-                        fetch('/api/reports/daily'),
-                        fetch('/api/analytics/weekly-trend')
-                    ]);
-                    
-                    const studentsData = await studentsRes.json();
-                    const reportData = await reportRes.json();
-                    
-                    if (studentsData.success) {
-                        document.getElementById('totalStudents').textContent = studentsData.count;
-                        students = studentsData.students;
+// Initialize charts with proper cleanup
+function initializeCharts() {
+    try {
+        // Destroy existing charts first
+        if (attendanceChart) {
+            attendanceChart.destroy();
+            attendanceChart = null;
+        }
+        if (trendsChart) {
+            trendsChart.destroy();
+            trendsChart = null;
+        }
+        if (classComparisonChart) {
+            classComparisonChart.destroy();
+            classComparisonChart = null;
+        }
+
+        // Wait for elements to be available
+        const attendanceCanvas = document.getElementById('attendanceChart');
+        const trendsCanvas = document.getElementById('trendsChart');
+        const classCanvas = document.getElementById('classComparisonChart');
+
+        if (!attendanceCanvas || !trendsCanvas || !classCanvas) {
+            console.warn('Chart canvases not ready, retrying...');
+            setTimeout(initializeCharts, 500);
+            return;
+        }
+
+        // Attendance Overview Chart
+        const ctx1 = attendanceCanvas.getContext('2d');
+        attendanceChart = new Chart(ctx1, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Daily Attendance Rate',
+                    data: [],
+                    borderColor: '#2196F3',
+                    backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Attendance Trends (Last 7 Days)'
+                    },
+                    legend: {
+                        display: false
                     }
-                    
-                    if (reportData.success) {
-                        document.getElementById('presentToday').textContent = reportData.summary.present_count;
-                        document.getElementById('absentToday').textContent = reportData.summary.absent_count;
-                        document.getElementById('attendanceRate').textContent = reportData.summary.attendance_rate + '%';
-                        
-                        // Update late arrivals
-                        const lateCount = reportData.late_arrivals || 0;
-                        document.getElementById('lateArrivals').textContent = lateCount;
-                        const lateBadge = document.getElementById('lateBadge');
-                        if (lateCount > 0) {
-                            lateBadge.style.display = 'flex';
-                            lateBadge.textContent = lateCount;
-                        } else {
-                            lateBadge.style.display = 'none';
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) {
+                                return value + '%';
+                            }
                         }
                     }
-                    
-                    // Load chart data
-                    loadAttendanceChart();
-                    
-                } catch (error) {
-                    console.error('Error loading dashboard data:', error);
-                    showNotification('Error loading dashboard data', 'error');
                 }
             }
-            
-            // Load attendance chart data
-            async function loadAttendanceChart() {
-                try {
-                    const response = await fetch('/api/analytics/weekly-trend');
-                    const data = await response.json();
-                    
-                    if (data.success && attendanceChart) {
-                        attendanceChart.data.labels = data.labels;
-                        attendanceChart.data.datasets[0].data = data.attendance_rates;
-                        attendanceChart.update();
+        });
+        
+        // Trends Chart for Analytics
+        const ctx2 = trendsCanvas.getContext('2d');
+        trendsChart = new Chart(ctx2, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Present',
+                    data: [],
+                    backgroundColor: '#4CAF50'
+                }, {
+                    label: 'Absent',
+                    data: [],
+                    backgroundColor: '#f44336'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Attendance Analytics'
                     }
-                } catch (error) {
-                    console.error('Error loading chart data:', error);
                 }
             }
-            
-            // Real-time updates
-            function updateLiveDisplay(data) {
-                const liveUpdates = document.getElementById('liveUpdates');
-                const timestamp = new Date().toLocaleTimeString();
-                const statusIcon = data.action === 'ENTRY' ? '✅' : '🚪';
-                const lateIcon = data.is_late ? '⏰' : '';
-                
-                const updateItem = document.createElement('div');
-                updateItem.className = 'update-item';
-                updateItem.innerHTML = `[${timestamp}] ${statusIcon} ${data.student_name} - ${data.action} ${lateIcon}`;
-                
-                liveUpdates.insertBefore(updateItem, liveUpdates.firstChild);
-                
-                // Keep only last 10 updates
-                while (liveUpdates.children.length > 10) {
-                    liveUpdates.removeChild(liveUpdates.lastChild);
-                }
-                
-                // Show notification for late arrivals
-                if (data.is_late) {
-                    showNotification(`Late arrival: ${data.student_name}`, 'warning');
-                }
-            }
-            
-            function updateStatsRealTime() {
-                // Refresh stats without full page reload
-                loadEnhancedDashboard();
-            }
-            
-            // Load students table
-            async function loadStudents() {
-                try {
-                    const response = await fetch('/api/students');
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        students = data.students;
-                        displayStudents();
+        });
+        
+        // Class Comparison Chart
+        const ctx3 = classCanvas.getContext('2d');
+        classComparisonChart = new Chart(ctx3, {
+            type: 'doughnut',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: [
+                        '#2196F3', '#4CAF50', '#ff9800', '#f44336', 
+                        '#9c27b0', '#00bcd4', '#ffeb3b', '#795548'
+                    ]
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Class-wise Attendance Distribution'
                     }
-                } catch (error) {
-                    console.error('Error loading students:', error);
-                    showNotification('Error loading students', 'error');
                 }
             }
-            
-            // Display students in table
-            function displayStudents(filteredStudents = null) {
-                const tbody = document.querySelector('#studentsTable tbody');
-                const studentsToShow = filteredStudents || students;
-                
-                if (studentsToShow.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 40px;">No students found</td></tr>';
-                    return;
-                }
-                
-                tbody.innerHTML = studentsToShow.map(student => `
-                    <tr>
-                        <td><code>${student.rfid_uid}</code></td>
-                        <td>${student.reg_no}</td>
-                        <td>${student.name}</td>
-                        <td>${student.class}</td>
-                        <td>
-                            ${student.is_present ? 
-                                '<span class="status online">PRESENT</span>' : 
-                                '<span class="status offline">ABSENT</span>'
-                            }
-                        </td>
-                        <td>
-                            <button class="btn btn-warning btn-sm" onclick="editStudent(${student.id})">✏️ Edit</button>
-                            <button class="btn btn-danger btn-sm" onclick="deleteStudent(${student.id})">🗑️ Delete</button>
-                        </td>
-                    </tr>
-                `).join('');
-            }
-            
-            // Filter students
-            function filterStudents() {
-                const searchTerm = document.getElementById('studentSearch').value.toLowerCase();
-                const filtered = students.filter(student => 
-                    student.name.toLowerCase().includes(searchTerm) ||
-                    student.reg_no.toLowerCase().includes(searchTerm) ||
-                    student.class.toLowerCase().includes(searchTerm)
-                );
-                displayStudents(filtered);
-            }
-            
-            // Load class options for filters
-            async function loadClassOptions() {
-                try {
-                    const response = await fetch('/api/classes');
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        const selects = ['classFilterAttendance', 'classFilterAnalytics'];
-                        selects.forEach(selectId => {
-                            const select = document.getElementById(selectId);
-                            if (select) {
-                                select.innerHTML = '<option value="">All Classes</option>';
-                                data.classes.forEach(className => {
-                                    select.innerHTML += `<option value="${className}">${className}</option>`;
-                                });
-                            }
-                        });
-                    }
-                } catch (error) {
-                    console.error('Error loading classes:', error);
-                }
-            }
-            
-            // Add student form submission
-            document.getElementById('studentForm').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                
-                const loading = document.getElementById('addStudentLoading');
-                const successAlert = document.getElementById('successAlert');
-                const errorAlert = document.getElementById('errorAlert');
-                
-                hideAlerts();
-                loading.style.display = 'inline-block';
-                
-                const studentData = {
-                    rfid_uid: document.getElementById('rfidUid').value,
-                    reg_no: document.getElementById('regNo').value,
-                    name: document.getElementById('studentName').value,
-                    class: document.getElementById('className').value,
-                    parent_email: document.getElementById('parentEmail').value,
-                    parent_phone: document.getElementById('parentPhone').value
-                };
-                
-                try {
-                    const response = await fetch('/api/students', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(studentData)
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showAlert(successAlert, '✅ Student added successfully!');
-                        document.getElementById('studentForm').reset();
-                        loadStudents();
-                        loadEnhancedDashboard();
-                        showNotification('Student added successfully', 'success');
-                    } else {
-                        showAlert(errorAlert, '❌ Error: ' + result.error);
-                    }
-                } catch (error) {
-                    showAlert(errorAlert, '❌ Network error: ' + error.message);
-                } finally {
-                    loading.style.display = 'none';
-                }
+        });
+
+        console.log('✅ Charts initialized successfully');
+    } catch (error) {
+        console.error('Chart initialization error:', error);
+    }
+}
+
+// Enhanced timestamp and uptime management
+function updateTimestampAndUptime() {
+    try {
+        // Update timestamp
+        const timestampElement = document.getElementById('timestamp');
+        if (timestampElement) {
+            const now = new Date();
+            timestampElement.textContent = now.toLocaleString('en-IN', {
+                timeZone: 'Asia/Kolkata',
+                year: 'numeric',
+                month: 'short',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
             });
-            
-            // Edit student functionality
-            function editStudent(studentId) {
-                const student = students.find(s => s.id === studentId);
-                if (!student) {
-                    showNotification('Student not found', 'error');
-                    return;
-                }
-                
-                currentEditStudentId = studentId;
-                
-                // Populate edit form
-                document.getElementById('editStudentId').value = studentId;
-                document.getElementById('editRfidUid').value = student.rfid_uid;
-                document.getElementById('editRegNo').value = student.reg_no;
-                document.getElementById('editStudentName').value = student.name;
-                document.getElementById('editClassName').value = student.class;
-                document.getElementById('editParentEmail').value = student.parent_email;
-                document.getElementById('editParentPhone').value = student.parent_phone || '';
-                
-                // Clear alerts
-                hideModalAlerts();
-                
-                // Show modal
-                document.getElementById('editModal').style.display = 'block';
+        }
+        
+        // Update page uptime
+        const uptimeElement = document.getElementById('systemUptime');
+        if (uptimeElement) {
+            if (!window.pageStartTime) {
+                window.pageStartTime = Date.now();
             }
             
-            // Edit student form submission
-            document.getElementById('editStudentForm').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                
-                const loading = document.getElementById('editStudentLoading');
-                const successAlert = document.getElementById('editSuccessAlert');
-                const errorAlert = document.getElementById('editErrorAlert');
-                
-                hideModalAlerts();
-                loading.style.display = 'inline-block';
-                
-                const studentData = {
-                    rfid_uid: document.getElementById('editRfidUid').value,
-                    reg_no: document.getElementById('editRegNo').value,
-                    name: document.getElementById('editStudentName').value,
-                    class: document.getElementById('editClassName').value,
-                    parent_email: document.getElementById('editParentEmail').value,
-                    parent_phone: document.getElementById('editParentPhone').value
-                };
-                
-                try {
-                    const response = await fetch(`/api/students/${currentEditStudentId}`, {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(studentData)
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showAlert(successAlert, '✅ Student updated successfully!');
-                        
-                        setTimeout(() => {
-                            closeEditModal();
-                            loadStudents();
-                            loadEnhancedDashboard();
-                            showNotification('Student updated successfully', 'success');
-                        }, 1000);
-                    } else {
-                        showAlert(errorAlert, '❌ Error: ' + result.error);
-                    }
-                } catch (error) {
-                    showAlert(errorAlert, '❌ Network error: ' + error.message);
-                } finally {
-                    loading.style.display = 'none';
-                }
-            });
+            const elapsed = Date.now() - window.pageStartTime;
+            const hours = Math.floor(elapsed / (1000 * 60 * 60));
+            const minutes = Math.floor((elapsed % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((elapsed % (1000 * 60)) / 1000);
             
-            // Delete student functionality
-            function deleteStudent(studentId) {
-                const student = students.find(s => s.id === studentId);
-                if (!student) {
-                    showNotification('Student not found', 'error');
-                    return;
-                }
-                
-                currentDeleteStudentId = studentId;
-                
-                // Populate delete modal with student info
-                document.getElementById('deleteStudentName').textContent = student.name;
-                document.getElementById('deleteStudentReg').textContent = student.reg_no;
-                document.getElementById('deleteStudentClass').textContent = student.class;
-                
-                // Show modal
-                document.getElementById('deleteModal').style.display = 'block';
+            uptimeElement.textContent = `${hours}h ${minutes}m ${seconds}s`;
+        }
+        
+        // Update server uptime
+        updateServerUptimeDisplay();
+    } catch (error) {
+        console.error('Error updating timestamp/uptime:', error);
+    }
+}
+
+async function updateServerUptimeDisplay() {
+    const serverUptimeElement = document.getElementById('systemUptimeDetails');
+    if (!serverUptimeElement) return;
+    
+    try {
+        const response = await fetch('/api/system/stats');
+        const data = await response.json();
+        
+        if (data.success && data.uptime) {
+            serverUptimeElement.textContent = data.uptime;
+        } else {
+            serverUptimeElement.textContent = 'N/A';
+        }
+    } catch (error) {
+        console.log('Server uptime unavailable:', error);
+        serverUptimeElement.textContent = 'Offline';
+    }
+}
+
+// Safe initialization function for timestamps
+function initializeTimestampUpdates() {
+    console.log('Initializing timestamp and uptime updates...');
+    
+    window.pageStartTime = Date.now();
+    updateTimestampAndUptime();
+    
+    const updateInterval = setInterval(() => {
+        try {
+            updateTimestampAndUptime();
+        } catch (error) {
+            console.error('Error updating timestamp/uptime:', error);
+        }
+    }, 1000);
+    
+    window.timestampInterval = updateInterval;
+    
+    const serverUptimeInterval = setInterval(() => {
+        try {
+            updateServerUptimeDisplay();
+        } catch (error) {
+            console.error('Error updating server uptime:', error);
+        }
+    }, 30000);
+    
+    window.serverUptimeInterval = serverUptimeInterval;
+    
+    console.log('✅ Timestamp and uptime updates initialized');
+}
+
+// Dark mode toggle
+function toggleTheme() {
+    document.body.classList.toggle('dark-mode');
+    const isDark = document.body.classList.contains('dark-mode');
+    localStorage.setItem('darkMode', isDark);
+    updateChartTheme(isDark);
+}
+
+function updateChartTheme(isDark) {
+    const textColor = isDark ? '#ffffff' : '#333333';
+    const gridColor = isDark ? '#555555' : '#e0e0e0';
+    
+    const charts = [attendanceChart, trendsChart, classComparisonChart];
+    charts.forEach(chart => {
+        if (chart && chart.options) {
+            if (chart.options.plugins && chart.options.plugins.title) {
+                chart.options.plugins.title.color = textColor;
             }
-            
-            // Confirm delete
-            async function confirmDelete() {
-                const loading = document.getElementById('deleteStudentLoading');
-                loading.style.display = 'inline-block';
-                
-                try {
-                    const response = await fetch(`/api/students/${currentDeleteStudentId}`, {
-                        method: 'DELETE'
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showNotification('Student deleted successfully', 'success');
-                        closeDeleteModal();
-                        loadStudents();
-                        loadEnhancedDashboard();
-                    } else {
-                        showNotification('Error: ' + result.error, 'error');
-                    }
-                } catch (error) {
-                    showNotification('Network error: ' + error.message, 'error');
-                } finally {
-                    loading.style.display = 'none';
+            if (chart.options.scales) {
+                if (chart.options.scales.x) {
+                    if (chart.options.scales.x.ticks) chart.options.scales.x.ticks.color = textColor;
+                    if (chart.options.scales.x.grid) chart.options.scales.x.grid.color = gridColor;
+                }
+                if (chart.options.scales.y) {
+                    if (chart.options.scales.y.ticks) chart.options.scales.y.ticks.color = textColor;
+                    if (chart.options.scales.y.grid) chart.options.scales.y.grid.color = gridColor;
                 }
             }
+            chart.update();
+        }
+    });
+}
+
+// Enhanced tab switching
+function showTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    const targetTab = document.getElementById(tabName);
+    if (targetTab) {
+        targetTab.classList.add('active');
+    }
+    
+    // Find and activate the nav tab
+    const navTabs = document.querySelectorAll('.nav-tab');
+    navTabs.forEach(tab => {
+        if (tab.textContent.toLowerCase().includes(tabName.toLowerCase())) {
+            tab.classList.add('active');
+        }
+    });
+    
+    // Load tab-specific data
+    switch(tabName) {
+        case 'students':
+            loadStudents();
+            loadClassOptions();
+            break;
+        case 'attendance':
+            loadAttendanceLogs();
+            loadClassOptions();
+            break;
+        case 'analytics':
+            loadAnalyticsData();
+            loadClassOptions();
+            break;
+        case 'system':
+            loadSystemStats();
+            loadCurrentApiKey();
+            break;
+        case 'overview':
+            loadEnhancedDashboard();
+            break;
+    }
+}
+
+// Set today's date in date inputs
+function setTodayDate() {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const dateInputs = ['dateFilter', 'reportDate', 'notificationDate', 'analyticsEndDate'];
+        dateInputs.forEach(id => {
+            const element = document.getElementById(id);
+            if (element) element.value = today;
+        });
+        
+        const weekAgo = new Date();
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        const startDate = document.getElementById('analyticsStartDate');
+        if (startDate) startDate.value = weekAgo.toISOString().split('T')[0];
+    } catch (error) {
+        console.error('Error setting dates:', error);
+    }
+}
+
+
+async function loadUnknownCards() {
+  try {
+    document.querySelector('#unknownCardsTable tbody').innerHTML =
+      '<tr><td colspan="4" style="text-align:center; padding:40px;"><div class="spinner"></div> Loading...</td></tr>';
+    const response = await fetch('/api/unknown-cards');
+    if (!response.ok) throw new Error('Network error');
+    const { success, cards } = await response.json();
+    if (success && cards.length) {
+      const rows = cards.map(card => `
+        <tr>
+          <td><code>${card.rfid_uid}</code></td>
+          <td>${card.date}</td>
+          <td>${card.timestamp}</td>
+          <td><button class="btn btn-sm btn-primary" onclick="openRegisterModal('${card.rfid_uid}')">Register</button></td>
+        </tr>
+      `).join('');
+      document.querySelector('#unknownCardsTable tbody').innerHTML = rows;
+      document.getElementById('unknownCardsAlert').style.display = 'none';
+    } else {
+      document.querySelector('#unknownCardsTable tbody').innerHTML =
+        '<tr><td colspan="4" style="text-align:center; padding:40px;">No unrecognized cards found.</td></tr>';
+    }
+  } catch (error) {
+    const alert = document.getElementById('unknownCardsAlert');
+    alert.style.display = 'block';
+    alert.textContent = 'Error loading unrecognized cards. Check console or try again.';
+    console.error('Error loading unknown cards:', error);
+  }
+}
+
+function openRegisterModal(rfidUid) {
+  document.getElementById('registerRfidUid').value = rfidUid;
+  document.getElementById('registerModal').style.display = 'block';
+  document.getElementById('registerRegNo').focus();
+  // Clear previous alerts
+  hideRegisterAlerts();
+  // Reset form except UID
+  const form = document.getElementById('registerStudentForm');
+  form.reset();
+  form.elements['registerRfidUid'].value = rfidUid;
+}
+
+function closeRegisterModal() {
+  document.getElementById('registerModal').style.display = 'none';
+}
+
+function hideRegisterAlerts() {
+  document.getElementById('registerSuccessAlert').style.display = 'none';
+  document.getElementById('registerErrorAlert').style.display = 'none';
+}
+
+async function registerStudent(e) {
+  e.preventDefault();
+  const form = document.getElementById('registerStudentForm');
+  const rfidUid = document.getElementById('registerRfidUid').value;
+  const regNo = document.getElementById('registerRegNo').value;
+  const name = document.getElementById('registerName').value;
+  const className = document.getElementById('registerClass').value;
+  const parentEmail = document.getElementById('registerParentEmail').value;
+  const parentPhone = document.getElementById('registerParentPhone').value;
+
+  // Validate required fields
+  if (!rfidUid || !regNo || !name || !className || !parentEmail) {
+    const errorAlert = document.getElementById('registerErrorAlert');
+    errorAlert.style.display = 'block';
+    errorAlert.textContent = 'Please fill all required fields!';
+    return false;
+  }
+
+  const studentData = {
+    rfid_uid: rfidUid,
+    reg_no: regNo,
+    name: name,
+    class: className,
+    parent_email: parentEmail,
+    parent_phone: parentPhone
+  };
+
+  try {
+    // 1. Register the student
+    const response = await fetch('/api/students', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(studentData)
+    });
+    const result = await response.json();
+    if (result.success) {
+      // 2. Delete the unknown card record
+      const deleteResponse = await fetch(`/api/unknown-cards/${rfidUid}`, {
+        method: 'DELETE'
+      });
+      const deleteResult = await deleteResponse.json();
+      if (!deleteResult.success) {
+        showNotification('Unknown card could not be deleted', 'warning');
+      }
+      // Show success, reset form, refresh data
+      const successAlert = document.getElementById('registerSuccessAlert');
+      successAlert.style.display = 'block';
+      successAlert.textContent = '✅ Student registered successfully!';
+      form.reset();
+      loadStudents();
+      loadUnknownCards();
+      setTimeout(() => {
+        closeRegisterModal();
+        hideRegisterAlerts();
+      }, 1500);
+    } else {
+      const errorAlert = document.getElementById('registerErrorAlert');
+      errorAlert.style.display = 'block';
+      errorAlert.textContent = '❌ ' + (result.error || 'Error registering student.');
+    }
+  } catch (error) {
+    const errorAlert = document.getElementById('registerErrorAlert');
+    errorAlert.style.display = 'block';
+    errorAlert.textContent = '❌ ' + (error.message || 'Network error during submission.');
+  }
+  return false;
+}
+
+
+
+// Load enhanced dashboard data
+async function loadEnhancedDashboard() {
+    try {
+        const [studentsRes, reportRes] = await Promise.all([
+            fetch('/api/students').catch(() => ({ json: () => ({ success: false }) })),
+            fetch('/api/reports/daily').catch(() => ({ json: () => ({ success: false }) }))
+        ]);
+        
+        const studentsData = await studentsRes.json();
+        const reportData = await reportRes.json();
+        
+        if (studentsData.success) {
+            const totalElement = document.getElementById('totalStudents');
+            if (totalElement) totalElement.textContent = studentsData.count || 0;
+            students = studentsData.students || [];
+        }
+        
+        if (reportData.success && reportData.summary) {
+            const presentElement = document.getElementById('presentToday');
+            const absentElement = document.getElementById('absentToday');
+            const rateElement = document.getElementById('attendanceRate');
+            const lateElement = document.getElementById('lateArrivals');
+            const lateBadge = document.getElementById('lateBadge');
             
-            // Load attendance logs with enhanced filtering
-            async function loadAttendanceLogs() {
-                try {
-                    const dateFilter = document.getElementById('dateFilter').value;
-                    const classFilter = document.getElementById('classFilterAttendance').value;
-                    const actionFilter = document.getElementById('actionFilter').value;
-                    
-                    let url = '/api/logs?limit=100';
-                    if (dateFilter) url += `&date=${dateFilter}`;
-                    if (classFilter) url += `&class=${classFilter}`;
-                    if (actionFilter) url += `&action=${actionFilter}`;
-                    
-                    const response = await fetch(url);
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        displayAttendanceLogs(data.logs);
-                    }
-                } catch (error) {
-                    console.error('Error loading attendance logs:', error);
-                    showNotification('Error loading attendance logs', 'error');
-                }
-            }
+            if (presentElement) presentElement.textContent = reportData.summary.present_count || 0;
+            if (absentElement) absentElement.textContent = reportData.summary.absent_count || 0;
+            if (rateElement) rateElement.textContent = (reportData.summary.attendance_rate || 0) + '%';
             
-            // Display attendance logs
-            function displayAttendanceLogs(logs) {
-                const tbody = document.querySelector('#attendanceTable tbody');
-                
-                if (logs.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px;">No attendance logs found</td></tr>';
-                    return;
-                }
-                
-                tbody.innerHTML = logs.map(log => `
-                    <tr>
-                        <td>${log.date}</td>
-                        <td>${log.timestamp}</td>
-                        <td>${log.student_name}</td>
-                        <td>${log.reg_no}</td>
-                        <td>${log.class}</td>
-                        <td>
-                            <span class="status ${log.action === 'ENTRY' ? 'online' : log.action === 'EXIT' ? 'warning' : 'offline'}">
-                                ${log.action}
-                            </span>
-                        </td>
-                        <td>
-                            ${log.is_late ? '<span class="status warning">LATE</span>' : '<span class="status online">ON TIME</span>'}
-                        </td>
-                    </tr>
-                `).join('');
-            }
+            const lateCount = reportData.late_arrivals || 0;
+            if (lateElement) lateElement.textContent = lateCount;
             
-            // Generate daily report
-            async function generateDailyReport() {
-                const reportDate = document.getElementById('reportDate').value;
-                const reportContent = document.getElementById('reportContent');
-                
-                if (!reportDate) {
-                    showNotification('Please select a date', 'warning');
-                    return;
-                }
-                
-                try {
-                    reportContent.innerHTML = '<div style="text-align: center; padding: 40px;"><div class="spinner"></div> Generating report...</div>';
-                    
-                    const response = await fetch(`/api/reports/daily?date=${reportDate}`);
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        const summary = data.summary;
-                        const present = data.present_students;
-                        const absent = data.absent_students;
-                        
-                        reportContent.innerHTML = `
-                            <div class="enhanced-stats" style="margin-bottom: 30px;">
-                                <div class="stat-card">
-                                    <div class="stat-number">${summary.total_students}</div>
-                                    <div class="stat-label">Total Students</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-number">${summary.present_count}</div>
-                                    <div class="stat-label">Present</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-number">${summary.absent_count}</div>
-                                    <div class="stat-label">Absent</div>
-                                </div>
-                                <div class="stat-card">
-                                    <div class="stat-number">${summary.attendance_rate}%</div>
-                                    <div class="stat-label">Attendance Rate</div>
-                                </div>
-                            </div>
-                            
-                            <div class="grid-2">
-                                <div>
-                                    <h4 style="color: var(--success-color); margin-bottom: 15px;">✅ Present Students (${present.length})</h4>
-                                    ${present.length > 0 ? `
-                                        <div class="table-container">
-                                            <table style="font-size: 14px;">
-                                                <thead>
-                                                    <tr><th>Name</th><th>Class</th><th>Entry</th><th>Exit</th></tr>
-                                                </thead>
-                                                <tbody>
-                                                    ${present.map(p => `
-                                                        <tr>
-                                                            <td>${p.student.name}</td>
-                                                            <td>${p.student.class}</td>
-                                                            <td>${p.entry_time || 'N/A'}</td>
-                                                            <td>${p.exit_time || 'Still present'}</td>
-                                                        </tr>
-                                                    `).join('')}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ` : '<p>No students were present on this date.</p>'}
-                                </div>
-                                
-                                <div>
-                                    <h4 style="color: var(--danger-color); margin-bottom: 15px;">❌ Absent Students (${absent.length})</h4>
-                                    ${absent.length > 0 ? `
-                                        <div class="table-container">
-                                            <table style="font-size: 14px;">
-                                                <thead>
-                                                    <tr><th>Name</th><th>Class</th><th>Reg No</th></tr>
-                                                </thead>
-                                                <tbody>
-                                                    ${absent.map(a => `
-                                                        <tr>
-                                                            <td>${a.name}</td>
-                                                            <td>${a.class}</td>
-                                                            <td>${a.reg_no}</td>
-                                                        </tr>
-                                                    `).join('')}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    ` : '<p>All students were present on this date! 🎉</p>'}
-                                </div>
-                            </div>
-                        `;
-                    }
-                } catch (error) {
-                    reportContent.innerHTML = '<p style="color: var(--danger-color); text-align: center;">Error generating report: ' + error.message + '</p>';
-                }
-            }
-            
-            // CSV Import functionality
-            document.getElementById('csvImportForm').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                
-                const loading = document.getElementById('importLoading');
-                const fileInput = document.getElementById('csvFile');
-                
-                if (!fileInput.files[0]) {
-                    showNotification('Please select a CSV file', 'warning');
-                    return;
-                }
-                
-                loading.style.display = 'inline-block';
-                
-                const formData = new FormData();
-                formData.append('csv_file', fileInput.files[0]);
-                
-                try {
-                    const response = await fetch('/api/students/import-csv', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showNotification(`✅ ${result.message}`, 'success');
-                        closeImportModal();
-                        loadStudents();
-                        loadEnhancedDashboard();
-                    } else {
-                        showNotification(`❌ ${result.error}`, 'error');
-                    }
-                } catch (error) {
-                    showNotification('❌ Error importing CSV: ' + error.message, 'error');
-                } finally {
-                    loading.style.display = 'none';
-                }
-            });
-            
-            // System management functions
-            async function loadSystemStats() {
-                try {
-                    const response = await fetch('/api/system/stats');
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        document.getElementById('systemTotalStudents').textContent = data.total_students;
-                        document.getElementById('totalRecords').textContent = data.total_records;
-                        document.getElementById('dbSize').textContent = data.db_size;
-                        document.getElementById('systemUptimeDetails').textContent = data.uptime;
-                        document.getElementById('apiRequests').textContent = data.api_requests_today;
-                        
-                        if (data.last_backup) {
-                            document.getElementById('lastBackup').textContent = new Date(data.last_backup).toLocaleString();
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error loading system stats:', error);
-                }
-            }
-            
-            // Backup data
-            async function backupData() {
-                try {
-                    const response = await fetch('/api/system/backup', { method: 'POST' });
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showNotification('✅ Backup created successfully!', 'success');
-                        document.getElementById('lastBackup').textContent = new Date().toLocaleString();
-                    } else {
-                        showNotification('❌ Backup failed: ' + result.error, 'error');
-                    }
-                } catch (error) {
-                    showNotification('❌ Backup failed: ' + error.message, 'error');
-                }
-            }
-            
-            // Export data to Excel
-            function exportData() {
-                window.open('/api/reports/export-excel', '_blank');
-                showNotification('Exporting data to Excel...', 'info');
-            }
-            
-            // API Key management
-            function toggleApiKey() {
-                const display = document.getElementById('apiKeyDisplay');
-                const button = event.target;
-                
-                if (apiKeyVisible) {
-                    display.textContent = '••••••••••••••••';
-                    button.textContent = '👁️ Show';
-                    apiKeyVisible = false;
+            if (lateBadge) {
+                if (lateCount > 0) {
+                    lateBadge.style.display = 'flex';
+                    lateBadge.textContent = lateCount;
                 } else {
-                    // In a real implementation, you'd fetch this from the server
-                    display.textContent = 'your-api-key-here';
-                    button.textContent = '🙈 Hide';
-                    apiKeyVisible = true;
+                    lateBadge.style.display = 'none';
                 }
             }
-            
-            async function regenerateApiKey() {
-                if (!confirm('Are you sure you want to regenerate the API key? This will invalidate the current key.')) {
-                    return;
+        }
+        
+        loadAttendanceChart();
+        
+    } catch (error) {
+        console.error('Error loading dashboard data:', error);
+        showNotification('Error loading dashboard data', 'error');
+    }
+}
+
+// Load attendance chart data
+async function loadAttendanceChart() {
+    try {
+        const response = await fetch('/api/analytics/weekly-trend');
+        const data = await response.json();
+        
+        if (data.success && attendanceChart) {
+            attendanceChart.data.labels = data.labels || [];
+            attendanceChart.data.datasets[0].data = data.attendance_rates || [];
+            attendanceChart.update();
+        }
+    } catch (error) {
+        console.error('Error loading chart data:', error);
+    }
+}
+
+// Real-time updates - FIXED: Define missing function
+function updateStatsRealTime() {
+    // Refresh stats without full page reload
+    loadEnhancedDashboard();
+}
+
+// Real-time display update
+function updateLiveDisplay(data) {
+    try {
+        const liveUpdates = document.getElementById('liveUpdates');
+        if (!liveUpdates) return;
+        
+        const timestamp = new Date().toLocaleTimeString();
+        const statusIcon = data.action === 'ENTRY' ? '✅' : '🚪';
+        const lateIcon = data.is_late ? '⏰' : '';
+        
+        const updateItem = document.createElement('div');
+        updateItem.className = 'update-item';
+        updateItem.innerHTML = `[${timestamp}] ${statusIcon} ${data.student_name} - ${data.action} ${lateIcon}`;
+        
+        liveUpdates.insertBefore(updateItem, liveUpdates.firstChild);
+        
+        // Keep only last 10 updates
+        while (liveUpdates.children.length > 10) {
+            liveUpdates.removeChild(liveUpdates.lastChild);
+        }
+        
+        if (data.is_late) {
+            showNotification(`Late arrival: ${data.student_name}`, 'warning');
+        }
+    } catch (error) {
+        console.error('Error updating live display:', error);
+    }
+}
+
+// Load students table
+async function loadStudents() {
+    try {
+        const response = await fetch('/api/students');
+        const data = await response.json();
+        
+        if (data.success) {
+            students = data.students || [];
+            displayStudents();
+        }
+    } catch (error) {
+        console.error('Error loading students:', error);
+        showNotification('Error loading students', 'error');
+    }
+}
+
+// Display students in table
+function displayStudents(filteredStudents = null) {
+    const tbody = document.querySelector('#studentsTable tbody');
+    if (!tbody) return;
+    
+    const studentsToShow = filteredStudents || students;
+    
+    if (studentsToShow.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; padding: 40px;">No students found</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = studentsToShow.map(student => `
+        <tr>
+            <td><code>${student.rfid_uid || ''}</code></td>
+            <td>${student.reg_no || ''}</td>
+            <td>${student.name || ''}</td>
+            <td>${student.class || student.class_name || ''}</td>
+            <td>
+                ${student.is_present ? 
+                    '<span class="status online">PRESENT</span>' : 
+                    '<span class="status offline">ABSENT</span>'
                 }
-                
-                try {
-                    const response = await fetch('/api/system/regenerate-api-key', { method: 'POST' });
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showNotification('API key regenerated successfully', 'success');
-                        document.getElementById('apiKeyDisplay').textContent = '••••••••••••••••';
-                        apiKeyVisible = false;
-                    }
-                } catch (error) {
-                    showNotification('Error regenerating API key', 'error');
-                }
-            }
-            
-            // Test API connection
-            async function testConnection() {
-                const resultDiv = document.getElementById('connectionResult');
-                try {
-                    resultDiv.innerHTML = '<div class="spinner"></div> Testing connection...';
-                    const response = await fetch('/');
-                    const data = await response.json();
-                    
-                    if (data.status === 'active') {
-                        resultDiv.innerHTML = '<div class="alert alert-success" style="display: block;">✅ API connection successful!</div>';
-                    } else {
-                        resultDiv.innerHTML = '<div class="alert alert-danger" style="display: block;">❌ API connection failed</div>';
-                    }
-                } catch (error) {
-                    resultDiv.innerHTML = '<div class="alert alert-danger" style="display: block;">❌ Connection error: ' + error.message + '</div>';
-                }
-            }
-            
-            // Get server IP
-            async function getServerIP() {
-                try {
-                    const ip = window.location.hostname;
-                    document.getElementById('serverIP').textContent = ip;
-                    document.getElementById('apiEndpoint').textContent = ip;
-                } catch (error) {
-                    console.error('Error getting IP:', error);
-                }
-            }
-            
-            // Notification functions
-            async function sendAbsentAlerts() {
-                const notificationDate = document.getElementById('notificationDate').value || new Date().toISOString().split('T')[0];
-                
-                try {
-                    const response = await fetch('/api/notifications/send-absent-alerts', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ date: notificationDate })
+            </td>
+            <td>
+                <button class="btn btn-warning btn-sm" onclick="editStudent(${student.id})">✏️ Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteStudent(${student.id})">🗑️ Delete</button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Filter students
+function filterStudents() {
+    const searchInput = document.getElementById('studentSearch');
+    if (!searchInput) return;
+    
+    const searchTerm = searchInput.value.toLowerCase();
+    const filtered = students.filter(student => 
+        (student.name || '').toLowerCase().includes(searchTerm) ||
+        (student.reg_no || '').toLowerCase().includes(searchTerm) ||
+        (student.class || student.class_name || '').toLowerCase().includes(searchTerm)
+    );
+    displayStudents(filtered);
+}
+
+// Load class options for filters
+async function loadClassOptions() {
+    try {
+        const response = await fetch('/api/classes');
+        const data = await response.json();
+        
+        if (data.success) {
+            const selects = ['classFilterAttendance', 'classFilterAnalytics'];
+            selects.forEach(selectId => {
+                const select = document.getElementById(selectId);
+                if (select) {
+                    select.innerHTML = '<option value="">All Classes</option>';
+                    (data.classes || []).forEach(className => {
+                        select.innerHTML += `<option value="${className}">${className}</option>`;
                     });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        showNotification(`✅ ${result.message}`, 'success');
-                    } else {
-                        showNotification(`❌ Error: ${result.error}`, 'error');
-                    }
-                } catch (error) {
-                    showNotification('❌ Error sending alerts: ' + error.message, 'error');
                 }
-            }
+            });
+        }
+    } catch (error) {
+        console.error('Error loading classes:', error);
+    }
+}
+
+// Student form handling
+function initializeStudentForm() {
+    const studentForm = document.getElementById('studentForm');
+    if (!studentForm) return;
+    
+    studentForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const loading = document.getElementById('addStudentLoading');
+        const successAlert = document.getElementById('successAlert');
+        const errorAlert = document.getElementById('errorAlert');
+        
+        hideAlerts();
+        if (loading) loading.style.display = 'inline-block';
+        
+        const studentData = {
+            rfid_uid: document.getElementById('rfidUid')?.value || '',
+            reg_no: document.getElementById('regNo')?.value || '',
+            name: document.getElementById('studentName')?.value || '',
+            class: document.getElementById('className')?.value || '',
+            parent_email: document.getElementById('parentEmail')?.value || '',
+            parent_phone: document.getElementById('parentPhone')?.value || ''
+        };
+        
+        try {
+            const response = await fetch('/api/students', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(studentData)
+            });
             
-            function saveNotificationSettings() {
-                const settings = {
-                    email: document.getElementById('emailNotifications').checked,
-                    realTime: document.getElementById('realTimeAlerts').checked,
-                    lateArrival: document.getElementById('lateArrivalAlerts').checked,
-                    lateThreshold: document.getElementById('lateThreshold').value,
-                    dailyReports: document.getElementById('dailyReports').checked
-                };
-                
-                localStorage.setItem('notificationSettings', JSON.stringify(settings));
-                showNotification('Notification settings saved', 'success');
-            }
+            const result = await response.json();
             
-            // Load notification settings
-            function loadNotificationSettings() {
-                const saved = localStorage.getItem('notificationSettings');
-                if (saved) {
-                    const settings = JSON.parse(saved);
-                    document.getElementById('emailNotifications').checked = settings.email !== false;
-                    document.getElementById('realTimeAlerts').checked = settings.realTime !== false;
-                    document.getElementById('lateArrivalAlerts').checked = settings.lateArrival !== false;
-                    document.getElementById('lateThreshold').value = settings.lateThreshold || 15;
-                    document.getElementById('dailyReports').checked = settings.dailyReports || false;
-                }
-            }
-            
-            // Analytics functions
-            async function generateAnalytics() {
-                const startDate = document.getElementById('analyticsStartDate').value;
-                const endDate = document.getElementById('analyticsEndDate').value;
-                const classFilter = document.getElementById('classFilterAnalytics').value;
-                const analysisType = document.getElementById('analysisType').value;
-                
-                if (!startDate || !endDate) {
-                    showNotification('Please select start and end dates', 'warning');
-                    return;
-                }
-                
-                try {
-                    const response = await fetch(`/api/analytics/advanced?start=${startDate}&end=${endDate}&class=${classFilter}&type=${analysisType}`);
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        updateAnalyticsCharts(data);
-                        showNotification('Analytics generated successfully', 'success');
-                    }
-                } catch (error) {
-                    console.error('Error generating analytics:', error);
-                    showNotification('Error generating analytics', 'error');
-                }
-            }
-            
-            function updateAnalyticsCharts(data) {
-                // Update trends chart
-                if (trendsChart && data.trends) {
-                    trendsChart.data.labels = data.trends.labels;
-                    trendsChart.data.datasets[0].data = data.trends.present;
-                    trendsChart.data.datasets[1].data = data.trends.absent;
-                    trendsChart.update();
-                }
-                
-                // Update class comparison chart
-                if (classComparisonChart && data.class_comparison) {
-                    classComparisonChart.data.labels = data.class_comparison.labels;
-                    classComparisonChart.data.datasets[0].data = data.class_comparison.data;
-                    classComparisonChart.update();
-                }
-            }
-            
-            // Utility functions
-            function refreshDashboard() {
+            if (result.success) {
+                showAlert(successAlert, '✅ Student added successfully!');
+                studentForm.reset();
+                loadStudents();
                 loadEnhancedDashboard();
-                showNotification('Dashboard refreshed', 'info');
+                showNotification('Student added successfully', 'success');
+            } else {
+                showAlert(errorAlert, '❌ Error: ' + (result.error || 'Unknown error'));
             }
-            
-            function clearForm() {
-                document.getElementById('studentForm').reset();
-                hideAlerts();
+        } catch (error) {
+            showAlert(errorAlert, '❌ Network error: ' + error.message);
+        } finally {
+            if (loading) loading.style.display = 'none';
+        }
+    });
+}
+
+// API Key Management
+let currentApiKeyData = null;
+
+async function loadCurrentApiKey() {
+    try {
+        const response = await fetch('/api/system/current-api-key');
+        const data = await response.json();
+        
+        if (data.success && data.has_key) {
+            currentApiKeyData = data.api_key_info;
+            displayApiKeyInfo(data.api_key_info);
+            localStorage.setItem('api_key_info', JSON.stringify(data.api_key_info));
+        } else {
+            displayNoApiKey();
+            localStorage.removeItem('api_key_info');
+        }
+    } catch (error) {
+        console.error('Error loading current API key:', error);
+        
+        const stored = localStorage.getItem('api_key_info');
+        if (stored) {
+            try {
+                const storedData = JSON.parse(stored);
+                displayApiKeyInfo(storedData, true);
+            } catch (parseError) {
+                displayNoApiKey();
             }
+        } else {
+            displayNoApiKey();
+        }
+    }
+}
+
+function displayApiKeyInfo(apiKeyInfo, fromCache = false) {
+    const apiKeyElement = document.getElementById('apiKeyDisplay');
+    const apiKeyStatusElement = document.getElementById('apiKeyStatus');
+    const apiKeyDetailsElement = document.getElementById('apiKeyDetails');
+    
+    if (apiKeyElement) {
+        apiKeyElement.textContent = apiKeyInfo.key_preview || 'Loading...';
+    }
+    
+    if (apiKeyStatusElement) {
+        apiKeyStatusElement.innerHTML = fromCache ? 
+            '<span class="status warning">CACHED</span>' : 
+            '<span class="status online">ACTIVE</span>';
+    }
+    
+    if (apiKeyDetailsElement) {
+        apiKeyDetailsElement.innerHTML = `
+            <small>
+                Created: ${apiKeyInfo.created_at ? new Date(apiKeyInfo.created_at).toLocaleString() : 'Unknown'}<br>
+                Last Used: ${apiKeyInfo.last_used ? new Date(apiKeyInfo.last_used).toLocaleString() : 'Never'}<br>
+                Usage Count: ${apiKeyInfo.usage_count || 0}
+            </small>
+        `;
+    }
+}
+
+function displayNoApiKey() {
+    const apiKeyElement = document.getElementById('apiKeyDisplay');
+    const apiKeyStatusElement = document.getElementById('apiKeyStatus');
+    const apiKeyDetailsElement = document.getElementById('apiKeyDetails');
+    
+    if (apiKeyElement) apiKeyElement.textContent = 'No API key generated';
+    if (apiKeyStatusElement) apiKeyStatusElement.innerHTML = '<span class="status offline">NONE</span>';
+    if (apiKeyDetailsElement) apiKeyDetailsElement.innerHTML = '<small>Click "Regenerate API Key" to create one</small>';
+}
+
+async function regenerateApiKey() {
+    if (!confirm('Regenerating API key will invalidate the current key. Continue?')) {
+        return;
+    }
+    
+    try {
+        const apiKeyElement = document.getElementById('apiKeyDisplay');
+        if (apiKeyElement) apiKeyElement.textContent = 'Generating...';
+        
+        const response = await fetch('/api/system/regenerate-api-key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            const newApiKeyInfo = result.api_key_info;
+            currentApiKeyData = newApiKeyInfo;
+            displayApiKeyInfo(newApiKeyInfo);
+            localStorage.setItem('api_key_info', JSON.stringify(newApiKeyInfo));
+            showNotification('✅ API key regenerated successfully!', 'success');
             
-            function hideAlerts() {
-                document.getElementById('successAlert').style.display = 'none';
-                document.getElementById('errorAlert').style.display = 'none';
+            if (result.api_key_info && result.api_key_info.full_key) {
+                showApiKeyModal(result.api_key_info.full_key);
             }
-            
-            function hideModalAlerts() {
-                document.getElementById('editSuccessAlert').style.display = 'none';
-                document.getElementById('editErrorAlert').style.display = 'none';
+        } else {
+            showNotification(`❌ Error: ${result.error}`, 'error');
+            if (currentApiKeyData) {
+                displayApiKeyInfo(currentApiKeyData);
+            } else {
+                displayNoApiKey();
             }
+        }
+    } catch (error) {
+        console.error('Network error:', error);
+        showNotification('❌ Network error: ' + error.message, 'error');
+        
+        if (currentApiKeyData) {
+            displayApiKeyInfo(currentApiKeyData);
+        } else {
+            displayNoApiKey();
+        }
+    }
+}
+
+function showApiKeyModal(fullKey) {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.style.display = 'block';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>🔑 New API Key Generated</h3>
+                <button class="close" onclick="this.closest('.modal').remove()">&times;</button>
+            </div>
+            <div style="padding: 20px;">
+                <p><strong>⚠️ Important:</strong> Copy this key now. It won't be shown again.</p>
+                <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 15px 0; font-family: monospace; word-break: break-all;">
+                    ${fullKey}
+                </div>
+                <div style="text-align: center; margin-top: 20px;">
+                    <button class="btn btn-primary" onclick="copyApiKeyToClipboard('${fullKey}')">📋 Copy to Clipboard</button>
+                    <button class="btn btn-secondary" onclick="this.closest('.modal').remove()">Close</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    setTimeout(() => {
+        if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }, 60000);
+}
+
+async function copyApiKeyToClipboard(apiKey) {
+    try {
+        if (navigator.clipboard) {
+            await navigator.clipboard.writeText(apiKey);
+        } else {
+            const textArea = document.createElement('textarea');
+            textArea.value = apiKey;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+        }
+        showNotification('🔑 API key copied to clipboard!', 'success');
+    } catch (error) {
+        console.error('Failed to copy to clipboard:', error);
+        showNotification('❌ Failed to copy to clipboard', 'error');
+    }
+}
+
+// System functions
+async function loadSystemStats() {
+    try {
+        const response = await fetch('/api/system/stats');
+        const data = await response.json();
+        
+        if (data.success) {
+            const elements = {
+                'systemTotalStudents': data.total_students,
+                'totalRecords': data.total_records,
+                'dbSize': data.db_size,
+                'systemUptimeDetails': data.uptime,
+                'apiRequests': data.api_requests_today
+            };
             
-            function showAlert(element, message) {
-                element.textContent = message;
-                element.style.display = 'block';
-            }
+            Object.entries(elements).forEach(([id, value]) => {
+                const element = document.getElementById(id);
+                if (element) element.textContent = value || 'N/A';
+            });
             
-            // Modal control functions
-            function closeEditModal() {
-                document.getElementById('editModal').style.display = 'none';
-                currentEditStudentId = null;
-            }
-            
-            function closeDeleteModal() {
-                document.getElementById('deleteModal').style.display = 'none';
-                currentDeleteStudentId = null;
-            }
-            
-            function showImportModal() {
-                document.getElementById('importModal').style.display = 'block';
-            }
-            
-            function closeImportModal() {
-                document.getElementById('importModal').style.display = 'none';
-                document.getElementById('csvImportForm').reset();
-            }
-            
-            // Close modals when clicking outside
-            window.onclick = function(event) {
-                const modals = ['editModal', 'deleteModal', 'importModal'];
-                modals.forEach(modalId => {
-                    const modal = document.getElementById(modalId);
-                    if (event.target === modal) {
-                        modal.style.display = 'none';
-                    }
-                });
-            }
-            
-            // Show notification function
-            function showNotification(message, type = 'info') {
-                const notification = document.createElement('div');
-                notification.className = `notification ${type}`;
-                notification.textContent = message;
-                notification.style.cssText = `
-                    position: fixed;
-                    top: 20px;
-                    right: 20px;
-                    padding: 15px 20px;
-                    border-radius: 8px;
-                    color: white;
-                    z-index: 10000;
-                    font-weight: 500;
-                    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                    animation: slideIn 0.3s ease;
-                    max-width: 300px;
-                    background: ${type === 'success' ? '#4CAF50' : 
-                               type === 'error' ? '#f44336' : 
-                               type === 'warning' ? '#ff9800' : '#2196F3'};
-                `;
-                
-                document.body.appendChild(notification);
-                
-                setTimeout(() => {
-                    notification.style.animation = 'slideOut 0.3s ease';
-                    setTimeout(() => notification.remove(), 300);
-                }, 4000);
-            }
-            
-            // CSS animation for notifications
-            const style = document.createElement('style');
-            style.textContent = `
-                @keyframes slideIn {
-                    from { transform: translateX(100%); opacity: 0; }
-                    to { transform: translateX(0); opacity: 1; }
+            if (data.last_backup) {
+                const lastBackupElement = document.getElementById('lastBackup');
+                if (lastBackupElement) {
+                    lastBackupElement.textContent = new Date(data.last_backup).toLocaleString();
                 }
-                @keyframes slideOut {
-                    from { transform: translateX(0); opacity: 1; }
-                    to { transform: translateX(100%); opacity: 0; }
-                }
+            }
+        }
+    } catch (error) {
+        console.error('Error loading system stats:', error);
+    }
+}
+
+async function getServerIP() {
+    try {
+        const ip = window.location.hostname;
+        const serverIPElement = document.getElementById('serverIP');
+        const apiEndpointElement = document.getElementById('apiEndpoint');
+        
+        if (serverIPElement) serverIPElement.textContent = ip;
+        if (apiEndpointElement) apiEndpointElement.textContent = ip;
+    } catch (error) {
+        console.error('Error getting IP:', error);
+    }
+}
+
+// Utility functions
+function refreshDashboard() {
+    loadEnhancedDashboard();
+    showNotification('Dashboard refreshed', 'info');
+}
+
+function hideAlerts() {
+    const successAlert = document.getElementById('successAlert');
+    const errorAlert = document.getElementById('errorAlert');
+    if (successAlert) successAlert.style.display = 'none';
+    if (errorAlert) errorAlert.style.display = 'none';
+}
+
+function showAlert(element, message) {
+    if (element) {
+        element.textContent = message;
+        element.style.display = 'block';
+    }
+}
+
+// Notification function
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        border-radius: 8px;
+        color: white;
+        z-index: 10000;
+        font-weight: 500;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        animation: slideIn 0.3s ease;
+        max-width: 300px;
+        background: ${type === 'success' ? '#4CAF50' : 
+                   type === 'error' ? '#f44336' : 
+                   type === 'warning' ? '#ff9800' : '#2196F3'};
+    `;
+    
+    document.body.appendChild(notification);
+    
+            setTimeout(() => {
+        notification.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+    }, 4000);
+}
+
+// Load attendance logs with enhanced filtering
+async function loadAttendanceLogs() {
+    try {
+        const dateFilter = document.getElementById('dateFilter')?.value || '';
+        const classFilter = document.getElementById('classFilterAttendance')?.value || '';
+        const actionFilter = document.getElementById('actionFilter')?.value || '';
+        
+        let url = '/api/logs?limit=100';
+        if (dateFilter) url += `&date=${dateFilter}`;
+        if (classFilter) url += `&class=${classFilter}`;
+        if (actionFilter) url += `&action=${actionFilter}`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data.success) {
+            displayAttendanceLogs(data.logs || []);
+        }
+    } catch (error) {
+        console.error('Error loading attendance logs:', error);
+        showNotification('Error loading attendance logs', 'error');
+    }
+}
+
+// Display attendance logs
+function displayAttendanceLogs(logs) {
+    const tbody = document.querySelector('#attendanceTable tbody');
+    if (!tbody) return;
+    
+    if (logs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px;">No attendance logs found</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = logs.map(log => `
+        <tr>
+            <td>${log.date || ''}</td>
+            <td>${log.timestamp || ''}</td>
+            <td>${log.student_name || ''}</td>
+            <td>${log.reg_no || ''}</td>
+            <td>${log.class || log.class_name || ''}</td>
+            <td>
+                <span class="status ${log.action === 'ENTRY' ? 'online' : log.action === 'EXIT' ? 'warning' : 'offline'}">
+                    ${log.action || 'UNKNOWN'}
+                </span>
+            </td>
+            <td>
+                ${log.is_late ? '<span class="status warning">LATE</span>' : '<span class="status online">ON TIME</span>'}
+            </td>
+        </tr>
+    `).join('');
+}
+
+// Generate daily report
+async function generateDailyReport() {
+    const reportDate = document.getElementById('reportDate')?.value;
+    const reportContent = document.getElementById('reportContent');
+    
+    if (!reportDate) {
+        showNotification('Please select a date', 'warning');
+        return;
+    }
+    
+    if (!reportContent) return;
+    
+    try {
+        reportContent.innerHTML = '<div style="text-align: center; padding: 40px;"><div class="spinner"></div> Generating report...</div>';
+        
+        const response = await fetch(`/api/reports/daily?date=${reportDate}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            const summary = data.summary || {};
+            const present = data.present_students || [];
+            const absent = data.absent_students || [];
+            
+            reportContent.innerHTML = `
+                <div class="enhanced-stats" style="margin-bottom: 30px;">
+                    <div class="stat-card">
+                        <div class="stat-number">${summary.total_students || 0}</div>
+                        <div class="stat-label">Total Students</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${summary.present_count || 0}</div>
+                        <div class="stat-label">Present</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${summary.absent_count || 0}</div>
+                        <div class="stat-label">Absent</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">${summary.attendance_rate || 0}%</div>
+                        <div class="stat-label">Attendance Rate</div>
+                    </div>
+                </div>
+                
+                <div class="grid-2">
+                    <div>
+                        <h4 style="color: var(--success-color); margin-bottom: 15px;">Present Students (${present.length})</h4>
+                        ${present.length > 0 ? `
+                            <div class="table-container">
+                                <table style="font-size: 14px;">
+                                    <thead>
+                                        <tr><th>Name</th><th>Class</th><th>Entry</th><th>Exit</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        ${present.map(p => `
+                                            <tr>
+                                                <td>${(p.student && p.student.name) || ''}</td>
+                                                <td>${(p.student && (p.student.class || p.student.class_name)) || ''}</td>
+                                                <td>${p.entry_time || 'N/A'}</td>
+                                                <td>${p.exit_time || 'Still present'}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : '<p>No students were present on this date.</p>'}
+                    </div>
+                    
+                    <div>
+                        <h4 style="color: var(--danger-color); margin-bottom: 15px;">Absent Students (${absent.length})</h4>
+                        ${absent.length > 0 ? `
+                            <div class="table-container">
+                                <table style="font-size: 14px;">
+                                    <thead>
+                                        <tr><th>Name</th><th>Class</th><th>Reg No</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        ${absent.map(a => `
+                                            <tr>
+                                                <td>${a.name || ''}</td>
+                                                <td>${a.class || a.class_name || ''}</td>
+                                                <td>${a.reg_no || ''}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : '<p>All students were present on this date!</p>'}
+                    </div>
+                </div>
             `;
-            document.head.appendChild(style);
+        } else {
+            reportContent.innerHTML = '<p style="color: var(--danger-color); text-align: center;">Error generating report: ' + (data.error || 'Unknown error') + '</p>';
+        }
+    } catch (error) {
+        reportContent.innerHTML = '<p style="color: var(--danger-color); text-align: center;">Error generating report: ' + error.message + '</p>';
+    }
+}
+
+// Student management functions
+function editStudent(studentId) {
+    const student = students.find(s => s.id === studentId);
+    if (!student) {
+        showNotification('Student not found', 'error');
+        return;
+    }
+    
+    currentEditStudentId = studentId;
+    
+    // Populate edit form
+    const elements = {
+        'editStudentId': studentId,
+        'editRfidUid': student.rfid_uid || '',
+        'editRegNo': student.reg_no || '',
+        'editStudentName': student.name || '',
+        'editClassName': student.class || student.class_name || '',
+        'editParentEmail': student.parent_email || '',
+        'editParentPhone': student.parent_phone || ''
+    };
+    
+    Object.entries(elements).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) element.value = value;
+    });
+    
+    hideModalAlerts();
+    
+    const modal = document.getElementById('editModal');
+    if (modal) modal.style.display = 'block';
+}
+
+function deleteStudent(studentId) {
+    const student = students.find(s => s.id === studentId);
+    if (!student) {
+        showNotification('Student not found', 'error');
+        return;
+    }
+    
+    currentDeleteStudentId = studentId;
+    
+    // Populate delete modal with student info
+    const elements = {
+        'deleteStudentName': student.name || '',
+        'deleteStudentReg': student.reg_no || '',
+        'deleteStudentClass': student.class || student.class_name || ''
+    };
+    
+    Object.entries(elements).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
+    });
+    
+    const modal = document.getElementById('deleteModal');
+    if (modal) modal.style.display = 'block';
+}
+
+async function confirmDelete() {
+    const loading = document.getElementById('deleteStudentLoading');
+    if (loading) loading.style.display = 'inline-block';
+    
+    try {
+        const response = await fetch(`/api/students/${currentDeleteStudentId}`, {
+            method: 'DELETE'
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Student deleted successfully', 'success');
+            closeDeleteModal();
+            loadStudents();
+            loadEnhancedDashboard();
+        } else {
+            showNotification('Error: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showNotification('Network error: ' + error.message, 'error');
+    } finally {
+        if (loading) loading.style.display = 'none';
+    }
+}
+
+// Modal control functions
+function closeEditModal() {
+    const modal = document.getElementById('editModal');
+    if (modal) modal.style.display = 'none';
+    currentEditStudentId = null;
+}
+
+function closeDeleteModal() {
+    const modal = document.getElementById('deleteModal');
+    if (modal) modal.style.display = 'none';
+    currentDeleteStudentId = null;
+}
+
+function showImportModal() {
+    const modal = document.getElementById('importModal');
+    if (modal) modal.style.display = 'block';
+}
+
+function closeImportModal() {
+    const modal = document.getElementById('importModal');
+    if (modal) modal.style.display = 'none';
+    const form = document.getElementById('csvImportForm');
+    if (form) form.reset();
+}
+
+function hideModalAlerts() {
+    const editSuccessAlert = document.getElementById('editSuccessAlert');
+    const editErrorAlert = document.getElementById('editErrorAlert');
+    if (editSuccessAlert) editSuccessAlert.style.display = 'none';
+    if (editErrorAlert) editErrorAlert.style.display = 'none';
+}
+
+// Analytics functions
+async function generateAnalytics() {
+    const startDate = document.getElementById('analyticsStartDate')?.value;
+    const endDate = document.getElementById('analyticsEndDate')?.value;
+    const classFilter = document.getElementById('classFilterAnalytics')?.value || '';
+    const analysisType = document.getElementById('analysisType')?.value || 'daily';
+    
+    if (!startDate || !endDate) {
+        showNotification('Please select start and end dates', 'warning');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/analytics/advanced?start=${startDate}&end=${endDate}&class=${classFilter}&type=${analysisType}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            updateAnalyticsCharts(data);
+            showNotification('Analytics generated successfully', 'success');
+        } else {
+            showNotification('Error generating analytics: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('Error generating analytics:', error);
+        showNotification('Error generating analytics', 'error');
+    }
+}
+
+function updateAnalyticsCharts(data) {
+    // Update trends chart
+    if (trendsChart && data.trends) {
+        trendsChart.data.labels = data.trends.labels || [];
+        trendsChart.data.datasets[0].data = data.trends.present || [];
+        trendsChart.data.datasets[1].data = data.trends.absent || [];
+        trendsChart.update();
+    }
+    
+    // Update class comparison chart
+    if (classComparisonChart && data.class_comparison) {
+        classComparisonChart.data.labels = data.class_comparison.labels || [];
+        classComparisonChart.data.datasets[0].data = data.class_comparison.data || [];
+        classComparisonChart.update();
+    }
+}
+
+// System management functions
+async function testConnection() {
+    const resultDiv = document.getElementById('connectionResult');
+    if (!resultDiv) return;
+    
+    try {
+        resultDiv.innerHTML = '<div class="spinner"></div> Testing connection...';
+        const response = await fetch('/');
+        const data = await response.json();
+        
+        if (data.status === 'active') {
+            resultDiv.innerHTML = '<div class="alert alert-success" style="display: block;">API connection successful!</div>';
+        } else {
+            resultDiv.innerHTML = '<div class="alert alert-danger" style="display: block;">API connection failed</div>';
+        }
+    } catch (error) {
+        resultDiv.innerHTML = '<div class="alert alert-danger" style="display: block;">Connection error: ' + error.message + '</div>';
+    }
+}
+
+async function backupData() {
+    try {
+        const response = await fetch('/api/system/backup', { method: 'POST' });
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification('Backup created successfully!', 'success');
+            const lastBackupElement = document.getElementById('lastBackup');
+            if (lastBackupElement) {
+                lastBackupElement.textContent = new Date().toLocaleString();
+            }
+        } else {
+            showNotification('Backup failed: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showNotification('Backup failed: ' + error.message, 'error');
+    }
+}
+
+function exportData() {
+    window.open('/api/reports/export-excel', '_blank');
+    showNotification('Exporting data to Excel...', 'info');
+}
+
+// Notification functions
+async function sendAbsentAlerts() {
+    const notificationDate = document.getElementById('notificationDate')?.value || new Date().toISOString().split('T')[0];
+    
+    try {
+        const response = await fetch('/api/notifications/send-absent-alerts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date: notificationDate })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            showNotification(result.message || 'Absent alerts sent successfully', 'success');
+        } else {
+            showNotification('Error: ' + (result.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        showNotification('Error sending alerts: ' + error.message, 'error');
+    }
+}
+
+function saveNotificationSettings() {
+    const settings = {
+        email: document.getElementById('emailNotifications')?.checked || false,
+        realTime: document.getElementById('realTimeAlerts')?.checked || false,
+        lateArrival: document.getElementById('lateArrivalAlerts')?.checked || false,
+        lateThreshold: document.getElementById('lateThreshold')?.value || 15,
+        dailyReports: document.getElementById('dailyReports')?.checked || false
+    };
+    
+    localStorage.setItem('notificationSettings', JSON.stringify(settings));
+    showNotification('Notification settings saved', 'success');
+}
+
+function loadNotificationSettings() {
+    const saved = localStorage.getItem('notificationSettings');
+    if (saved) {
+        try {
+            const settings = JSON.parse(saved);
+            const elements = {
+                'emailNotifications': settings.email !== false,
+                'realTimeAlerts': settings.realTime !== false,
+                'lateArrivalAlerts': settings.lateArrival !== false,
+                'dailyReports': settings.dailyReports || false
+            };
+            
+            Object.entries(elements).forEach(([id, value]) => {
+                const element = document.getElementById(id);
+                if (element && typeof value === 'boolean') element.checked = value;
+            });
+            
+            const thresholdElement = document.getElementById('lateThreshold');
+            if (thresholdElement) thresholdElement.value = settings.lateThreshold || 15;
+        } catch (error) {
+            console.error('Error loading notification settings:', error);
+        }
+    }
+}
+
+// Additional utility functions
+function clearForm() {
+    const form = document.getElementById('studentForm');
+    if (form) form.reset();
+    hideAlerts();
+}
+
+function loadAnalyticsData() {
+    // Placeholder for analytics data loading
+    console.log('Loading analytics data...');
+}
+
+// Cleanup function
+function cleanupTimestampUpdates() {
+    if (window.timestampInterval) {
+        clearInterval(window.timestampInterval);
+        console.log('Timestamp interval cleared');
+    }
+    if (window.serverUptimeInterval) {
+        clearInterval(window.serverUptimeInterval);
+        console.log('Server uptime interval cleared');
+    }
+}
+
+// Initialize form handlers when DOM is ready
+setTimeout(() => {
+    initializeStudentForm();
+    
+    // Initialize edit student form
+    const editForm = document.getElementById('editStudentForm');
+    if (editForm) {
+        editForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const loading = document.getElementById('editStudentLoading');
+            const successAlert = document.getElementById('editSuccessAlert');
+            const errorAlert = document.getElementById('editErrorAlert');
+            
+            hideModalAlerts();
+            if (loading) loading.style.display = 'inline-block';
+            
+            const studentData = {
+                rfid_uid: document.getElementById('editRfidUid')?.value || '',
+                reg_no: document.getElementById('editRegNo')?.value || '',
+                name: document.getElementById('editStudentName')?.value || '',
+                class: document.getElementById('editClassName')?.value || '',
+                parent_email: document.getElementById('editParentEmail')?.value || '',
+                parent_phone: document.getElementById('editParentPhone')?.value || ''
+            };
+            
+            try {
+                const response = await fetch(`/api/students/${currentEditStudentId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(studentData)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showAlert(successAlert, 'Student updated successfully!');
+                    setTimeout(() => {
+                        closeEditModal();
+                        loadStudents();
+                        loadEnhancedDashboard();
+                        showNotification('Student updated successfully', 'success');
+                    }, 1000);
+                } else {
+                    showAlert(errorAlert, 'Error: ' + (result.error || 'Unknown error'));
+                }
+            } catch (error) {
+                showAlert(errorAlert, 'Network error: ' + error.message);
+            } finally {
+                if (loading) loading.style.display = 'none';
+            }
+        });
+    }
+    
+    // Initialize CSV import form
+    const csvForm = document.getElementById('csvImportForm');
+    if (csvForm) {
+        csvForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const loading = document.getElementById('importLoading');
+            const fileInput = document.getElementById('csvFile');
+            
+            if (!fileInput || !fileInput.files[0]) {
+                showNotification('Please select a CSV file', 'warning');
+                return;
+            }
+            
+            if (loading) loading.style.display = 'inline-block';
+            
+            const formData = new FormData();
+            formData.append('csv_file', fileInput.files[0]);
+            
+            try {
+                const response = await fetch('/api/students/import-csv', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showNotification(result.message || 'Students imported successfully', 'success');
+                    closeImportModal();
+                    loadStudents();
+                    loadEnhancedDashboard();
+                } else {
+                    showNotification(result.error || 'Import failed', 'error');
+                }
+            } catch (error) {
+                showNotification('Error importing CSV: ' + error.message, 'error');
+            } finally {
+                if (loading) loading.style.display = 'none';
+            }
+        });
+    }
+}, 1000);
+
+// Close modals when clicking outside
+window.onclick = function(event) {
+    const modals = ['editModal', 'deleteModal', 'importModal'];
+    modals.forEach(modalId => {
+        const modal = document.getElementById(modalId);
+        if (modal && event.target === modal) {
+            modal.style.display = 'none';
+        }
+    });
+};
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', cleanupTimestampUpdates);
+
+// CSS animation for notifications
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+    }
+`;
+document.head.appendChild(style);
             
             // Initialize notification settings on load
             loadNotificationSettings();
@@ -2694,6 +3287,28 @@ def delete_student(student_id):
             'success': False,
             'error': f'Error deleting student: {str(e)}'
         }), 400
+    
+
+@app.route('/api/unknown-cards/<rfid_uid>', methods=['DELETE'])
+@login_required
+def delete_unknown_card(rfid_uid):
+    """Delete an unknown RFID card record (admin only)"""
+    try:
+        card = UnknownCard.query.filter_by(rfid_uid=rfid_uid).first()
+        if card:
+            db.session.delete(card)
+            db.session.commit()
+            log_system_activity(
+                'UNKNOWN_CARD_DELETED',
+                f'Deleted unknown card: {rfid_uid}',
+                None
+            )
+            return jsonify(success=True, message='Unknown card record deleted')
+        return jsonify(success=False, error='Card not found'), 404
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(success=False, error=str(e)), 500
+    
 
 @app.route('/api/student', methods=['GET'])
 @api_key_required
@@ -3252,6 +3867,20 @@ def generate_class_comparison(start_date, end_date):
             'data': []
         }
 
+@app.route('/api/unknown-cards', methods=['GET'])
+@login_required
+def get_unknown_cards():
+    """
+    List all unknown/unregistered RFID cards for admin review
+    """
+    unknown_cards = UnknownCard.query.order_by(
+        UnknownCard.date.desc(),
+        UnknownCard.timestamp.desc()
+    ).all()
+    cards = [card.to_dict() for card in unknown_cards]
+    return jsonify(success=True, cards=cards)
+
+
 
 @app.route('/api/students/import-csv', methods=['POST'])
 @login_required
@@ -3594,34 +4223,155 @@ This is an automated message from the school attendance system.
             'success': False,
             'error': f'Error sending alerts: {str(e)}'
         }), 400
+    
+
+
+
+@app.route('/api/system/current-api-key', methods=['GET'])
+@login_required
+def get_current_api_key():
+    """Get the current active API key (masked for security)"""
+    try:
+        # Get the most recent active API key
+        current_key = ApiKey.query.filter_by(is_active=True).order_by(ApiKey.created_at.desc()).first()
+        
+        if current_key:
+            return jsonify({
+                'success': True,
+                'has_key': True,
+                'api_key_info': {
+                    'id': current_key.id,
+                    'key_preview': f"{current_key.key[:8]}{'*' * 24}",  # Masked
+                    'created_at': current_key.created_at.isoformat(),
+                    'last_used': current_key.last_used.isoformat() if current_key.last_used else None,
+                    'usage_count': current_key.usage_count
+                }
+            })
+        else:
+            return jsonify({
+                'success': True,
+                'has_key': False,
+                'message': 'No API key found. Generate one first.'
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Error fetching API key: {str(e)}'
+        }), 500
+
+
 
 @app.route('/api/system/regenerate-api-key', methods=['POST'])
 @login_required
 def regenerate_api_key():
-    """Regenerate API key for Arduino authentication"""
+    """Regenerate API key and store in database securely"""
     try:
+        # Generate new secure API key (32 characters)
         new_api_key = secrets.token_urlsafe(32)
         
-        # In a real implementation, you would store this in your config or database
-        # For now, we'll just return it
+        # Deactivate all existing API keys
+        existing_keys = ApiKey.query.all()
+        for key in existing_keys:
+            key.is_active = False
         
+        # Create new API key record
+        api_key_record = ApiKey(
+            key=new_api_key,
+            name=f'Arduino Device Key - Generated {datetime.now().strftime("%Y-%m-%d %H:%M")}',
+            created_by=session.get('user_id'),
+            is_active=True,
+            created_at=datetime.utcnow()
+        )
+        
+        # Save to database
+        db.session.add(api_key_record)
+        db.session.commit()
+        
+        # Log system activity
         log_system_activity(
             'API_KEY_REGENERATED',
-            'API key was regenerated',
+            f'New API key generated and stored in database (ID: {api_key_record.id})',
             session.get('user_id')
         )
         
+        print(f"✅ New API key generated: {new_api_key[:8]}... (ID: {api_key_record.id})")
+        
         return jsonify({
             'success': True,
-            'message': 'API key regenerated successfully',
-            'new_key': new_api_key[:8] + '...',  # Show only first 8 chars for security
-            'note': 'Update your Arduino code with the new API key'
+            'message': 'API key regenerated and saved to database',
+            'api_key_info': {
+                'id': api_key_record.id,
+                'key_preview': f"{new_api_key[:8]}{'*' * 24}",
+                'full_key': new_api_key,  # Only show full key once for copying
+                'created_at': api_key_record.created_at.isoformat(),
+                'name': api_key_record.name
+            },
+            'instructions': {
+                'arduino_update': 'Update your Arduino code with the new API key',
+                'test_endpoint': f'Test with: curl -H "X-API-Key: {new_api_key}" http://your-server:5000/api/students'
+            }
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Error regenerating API key: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'Failed to regenerate API key: {str(e)}'
+        }), 500
+
+@app.route('/api/system/api-keys', methods=['GET'])
+@login_required
+def list_api_keys():
+    """List all API keys (masked for security)"""
+    try:
+        api_keys = ApiKey.query.order_by(ApiKey.created_at.desc()).all()
+        
+        return jsonify({
+            'success': True,
+            'api_keys': [key.to_dict() for key in api_keys],
+            'active_key_count': len([k for k in api_keys if k.is_active])
         })
         
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': f'Error regenerating API key: {str(e)}'
+            'error': f'Error fetching API keys: {str(e)}'
+        }), 500
+
+@app.route('/api/system/api-keys/<int:key_id>', methods=['DELETE'])
+@login_required
+def delete_api_key(key_id):
+    """Delete/deactivate an API key"""
+    try:
+        api_key = ApiKey.query.get(key_id)
+        if not api_key:
+            return jsonify({
+                'success': False,
+                'error': 'API key not found'
+            }), 404
+        
+        # Deactivate instead of delete to maintain audit trail
+        api_key.is_active = False
+        db.session.commit()
+        
+        log_system_activity(
+            'API_KEY_DEACTIVATED',
+            f'API key deactivated (ID: {key_id})',
+            session.get('user_id')
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': 'API key deactivated successfully'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'error': f'Error deactivating API key: {str(e)}'
         }), 500
 
 # WebSocket events for real-time updates
@@ -3835,6 +4585,16 @@ login_template = """
 </html>
 """
 
+
+@app.route('/api/system/heartbeat', methods=['POST'])
+def heartbeat():
+    data = request.get_json()
+    mac = data.get('mac_address')
+    device_type = data.get('device_type', 'unknown')
+    print(f"Heartbeat from: {mac} ({device_type})")
+    # Optionally log to database
+    return jsonify({"success": True})
+
 # Error handlers
 @app.errorhandler(404)
 def not_found(error):
@@ -3916,7 +4676,7 @@ if __name__ == '__main__':
     
     # Create database tables
     create_tables()
-    
+    create_api_key_table()
     # Initialize scheduler for automatic tasks
     init_scheduler()
     
