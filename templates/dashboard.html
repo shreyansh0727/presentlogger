@@ -521,75 +521,194 @@
             flex-wrap: wrap;
         }
         
-        /* Footer */
-        .footer {
-            background: linear-gradient(135deg, var(--dark) 0%, #0f172a 100%);
-            color: white;
-            padding: 3rem 1rem 1.5rem;
-            margin-top: 3rem;
-        }
-        
-        .footer-content {
-            max-width: 1600px;
-            margin: 0 auto;
-        }
-        
-        .footer-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 2rem;
-            margin-bottom: 2rem;
-        }
-        
-        .footer-section h3 {
-            color: var(--primary);
-            margin-bottom: 1rem;
-            font-size: 1.1rem;
-        }
-        
-        .footer-section p {
-            color: #94a3b8;
-            line-height: 1.6;
-            font-size: 0.875rem;
-        }
-        
-        .social-links {
-            display: flex;
-            gap: 0.75rem;
-            margin-top: 1rem;
-        }
-        
-        .social-link {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.1);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            text-decoration: none;
-            transition: all 0.3s;
-        }
-        
-        .social-link:hover {
-            background: var(--primary);
-            transform: translateY(-3px);
-        }
-        
-        .footer-bottom {
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-            padding-top: 1.5rem;
-            text-align: center;
-            color: #64748b;
-            font-size: 0.875rem;
-        }
-        
-        .footer-bottom a {
-            color: var(--primary);
-            text-decoration: none;
-        }
-        
+       .footer {
+    background: linear-gradient(135deg, var(--dark) 0%, #0f172a 100%);
+    color: white;
+    padding: 3rem 2rem 1.5rem;
+    margin-top: 4rem;
+}
+
+.footer-content {
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+.footer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 3rem;
+    margin-bottom: 2rem;
+}
+
+.footer-section h3 {
+    color: var(--primary);
+    margin-bottom: 1.5rem;
+    font-size: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.footer-section p {
+    color: #94a3b8;
+    line-height: 1.8;
+    margin-bottom: 1rem;
+}
+
+.team-members {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.team-member {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 0.5rem;
+    transition: all 0.3s;
+}
+
+.team-member:hover {
+    background: rgba(102, 126, 234, 0.1);
+    transform: translateX(5px);
+}
+
+.member-avatar {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: white;
+}
+
+.member-info h4 {
+    color: white;
+    margin-bottom: 0.25rem;
+    font-size: 1rem;
+}
+
+.member-info p {
+    color: #64748b;
+    font-size: 0.875rem;
+    margin: 0;
+}
+
+.quick-links {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.quick-links a {
+    color: #94a3b8;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.3s;
+}
+
+.quick-links a:hover {
+    color: var(--primary);
+    transform: translateX(5px);
+}
+
+.social-links {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.social-link {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    text-decoration: none;
+    transition: all 0.3s;
+}
+
+.social-link:hover {
+    background: var(--primary);
+    transform: translateY(-3px);
+}
+
+.footer-bottom {
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding-top: 1.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.copyright {
+    color: #64748b;
+    font-size: 0.875rem;
+}
+
+.copyright a {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.copyright a:hover {
+    text-decoration: underline;
+}
+
+.tech-stack {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.tech-badge {
+    padding: 0.375rem 0.75rem;
+    background: rgba(102, 126, 234, 0.1);
+    border: 1px solid rgba(102, 126, 234, 0.3);
+    border-radius: 0.375rem;
+    color: var(--primary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+@media (max-width: 768px) {
+    .footer {
+        padding: 2rem 1rem 1rem;
+    }
+    
+    .footer-grid {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+    }
+    
+    .footer-bottom {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .tech-stack {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+}
         /* Responsive Design */
         @media (max-width: 768px) {
             .mobile-menu-btn {
@@ -920,25 +1039,103 @@
     </div>
 
     <!-- Footer -->
-    <footer class="footer">
+ <footer class="footer">
         <div class="footer-content">
             <div class="footer-grid">
+                <!-- About Section -->
                 <div class="footer-section">
-                    <h3><i class="fas fa-graduation-cap"></i> About</h3>
-                    <p>Enhanced RFID-based Attendance System using Arduino R4 WiFi & MongoDB.</p>
+                    <h3><i class="fas fa-graduation-cap"></i> About Project</h3>
+                    <p>
+                        Enhanced RFID-based Attendance Management System using Arduino UNO R4 WiFi, 
+                        MongoDB, and real-time WebSocket technology. Built for modern educational institutions.
+                    </p>
                     <div class="social-links">
-                        <a href="https://github.com/shreyansh0727" target="_blank"><i class="fab fa-github"></i></a>
-                        <a href="mailto:shreyanshm90051@gmail.com"><i class="fas fa-envelope"></i></a>
+                        <a href="https://github.com/shreyansh0727" class="social-link" target="_blank" title="GitHub">
+                            <i class="fab fa-github"></i>
+                        </a>
+                        <a href="mailto:shreyanshm90051@gmail.com" class="social-link" title="Email">
+                            <i class="fas fa-envelope"></i>
+                        </a>
                     </div>
                 </div>
+
+                <!-- Team Members Section -->
+                <div class="footer-section">
+                    <h3><i class="fas fa-users"></i> Development Team</h3>
+                    <div class="team-members">
+                        <div class="team-member">
+                            <div class="member-avatar">S</div>
+                            <div class="member-info">
+                                <h4>Shreyansh Kumar</h4>
+                                <p>Full-Stack Developer & Project Lead</p>
+                            </div>
+                        </div>
+                        <div class="team-member">
+                            <div class="member-avatar">P</div>
+                            <div class="member-info">
+                                <h4>Prakhyat Kumar</h4>
+                                <p>Logic & Cores</p>
+                            </div>
+                        </div>
+                        <div class="team-member">
+                            <div class="member-avatar">A</div>
+                            <div class="member-info">
+                                <h4>Avinesh Maurya</h4>
+                                <p>Production Manager</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Links Section -->
                 <div class="footer-section">
                     <h3><i class="fas fa-link"></i> Quick Links</h3>
-                    <p><a href="https://shreyansh.hyperflowai.site" target="_blank" style="color: #94a3b8;">Portfolio</a></p>
-                    <p><a href="https://github.com/shreyansh0727/presentlogger" target="_blank" style="color: #94a3b8;">GitHub</a></p>
+                    <div class="quick-links">
+                        <a href="https://shreyansh.hyperflowai.site" target="_blank">
+                            <i class="fas fa-briefcase"></i> Portfolio Website
+                        </a>
+                        <a href="https://github.com/shreyansh0727/presentlogger" target="_blank">
+                            <i class="fab fa-github"></i> GitHub Repository
+                        </a>
+                        <a href="https://docs.mongodb.com/" target="_blank">
+                            <i class="fas fa-database"></i> MongoDB Documentation
+                        </a>
+                        <a href="https://docs.arduino.cc/" target="_blank">
+                            <i class="fas fa-microchip"></i> Arduino Documentation
+                        </a>
+                        <a href="https://flask.palletsprojects.com/" target="_blank">
+                            <i class="fas fa-flask"></i> Flask Documentation
+                        </a>
+                        <a href="https://www.sunbeamrobertsganj.com/" target="_blank">
+                            <i class="fas fa-briefcase"></i> Our School
+                        </a>
+                    </div>
                 </div>
             </div>
+
+            <!-- Footer Bottom -->
             <div class="footer-bottom">
-                <p>&copy; 2025 <a href="https://shreyansh.hyperflowai.site" target="_blank">Shreyansh</a> | Made with <i class="fas fa-heart" style="color: #ef4444;"></i></p>
+                <div class="copyright">
+                    <p>
+                        &copy; 2025 <a href="https://shreyansh.hyperflowai.site" target="_blank">Shreyansh</a> | 
+                        RFID Attendance System | 
+                        Made with <i class="fas fa-heart" style="color: #ef4444;"></i> for Education
+                    </p>
+                </div>
+                <div class="tech-stack">
+                    <span class="tech-badge">
+                        <i class="fas fa-microchip"></i> Arduino R4 WiFi
+                    </span>
+                    <span class="tech-badge">
+                        <i class="fas fa-database"></i> MongoDB
+                    </span>
+                    <span class="tech-badge">
+                        <i class="fab fa-python"></i> Flask
+                    </span>
+                    <span class="tech-badge">
+                        <i class="fas fa-bolt"></i> Socket.IO
+                    </span>
+                </div>
             </div>
         </div>
     </footer>
