@@ -1,6 +1,7 @@
 from datetime import datetime, date, time
 from bson import ObjectId
 import pytz
+import uuid  # ADD THIS LINE - MISSING IMPORT
 from database import get_db
 
 class MongoModel:
@@ -295,40 +296,60 @@ class AdminUser(MongoModel):
         )
 
 
-class ApiKey(MongoModel):
-    """API key model for Arduino authentication"""
-    collection_name = 'api_keys'
+class ApiKey:
+    """API Key management"""
     
     @staticmethod
-    def create(key, name='Arduino Device Key', created_by=None):
-        """Create API key"""
+    def get_collection():
+        return get_db()['api_keys']
+    
+    @staticmethod
+    def create(key, description, created_by=None):
+        """Create new API key"""
         collection = ApiKey.get_collection()
-        
-        key_doc = {
+        api_key = {
+            'id': str(uuid.uuid4()),  # Now uuid is imported
             'key': key,
-            'name': name,
-            'created_at': datetime.utcnow(),
-            'created_by': created_by,
+            'description': description,
             'is_active': True,
+            'created_by': created_by,
+            'created_at': datetime.utcnow(),
             'last_used': None,
             'usage_count': 0
         }
-        
-        result = collection.insert_one(key_doc)
-        key_doc['_id'] = result.inserted_id
-        return ApiKey.serialize_doc(key_doc)
+        collection.insert_one(api_key)
+        return api_key
     
     @staticmethod
-    def validate_key(provided_key):
+    def get_active_key():
+        """Get the currently active API key - ONLY ONE"""
+        collection = ApiKey.get_collection()
+        # Get the most recently created active key
+        key = collection.find_one(
+            {'is_active': True},
+            sort=[('created_at', -1)]  # Get the newest active key
+        )
+        if key:
+            return {
+                'id': key.get('id'),
+                'key': key.get('key'),
+                'description': key.get('description'),
+                'created_at': key.get('created_at').isoformat() if key.get('created_at') else None,
+                'last_used': key.get('last_used').isoformat() if key.get('last_used') else None,
+                'usage_count': key.get('usage_count', 0)
+            }
+        return None
+    
+    @staticmethod
+    def validate_key(key):
         """Validate API key and update usage"""
         collection = ApiKey.get_collection()
+        api_key = collection.find_one({'key': key, 'is_active': True})
         
-        key = collection.find_one({'key': provided_key, 'is_active': True})
-        
-        if key:
+        if api_key:
             # Update usage statistics
             collection.update_one(
-                {'_id': key['_id']},
+                {'key': key},
                 {
                     '$set': {'last_used': datetime.utcnow()},
                     '$inc': {'usage_count': 1}
@@ -338,18 +359,30 @@ class ApiKey(MongoModel):
         return False
     
     @staticmethod
-    def get_active_key():
-        """Get first active API key"""
+    def deactivate_key(key_id):
+        """Deactivate an API key"""
         collection = ApiKey.get_collection()
-        key = collection.find_one({'is_active': True})
-        return ApiKey.serialize_doc(key)
+        result = collection.update_one(
+            {'id': key_id},
+            {'$set': {'is_active': False, 'deactivated_at': datetime.utcnow()}}
+        )
+        return result.modified_count > 0
     
     @staticmethod
-    def find_all():
-        """Get all API keys"""
-        collection = ApiKey.get_collection()
-        keys = collection.find()
-        return [ApiKey.serialize_doc(k) for k in keys]
+    def serialize_doc(doc):
+        """Convert MongoDB document to JSON-serializable dict"""
+        if not doc:
+            return None
+        return {
+            'id': doc.get('id'),
+            'key': doc.get('key'),
+            'description': doc.get('description'),
+            'is_active': doc.get('is_active'),
+            'created_by': doc.get('created_by'),
+            'created_at': doc.get('created_at').isoformat() if doc.get('created_at') else None,
+            'last_used': doc.get('last_used').isoformat() if doc.get('last_used') else None,
+            'usage_count': doc.get('usage_count', 0)
+        }
 
 
 class SystemLog(MongoModel):
