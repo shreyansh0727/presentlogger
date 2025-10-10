@@ -17,6 +17,7 @@ load_dotenv()
 # ==================== APP INITIALIZATION ====================
 
 def create_app(config_name=None):
+    """Application factory"""
     app = Flask(__name__)
     
     if config_name is None:
@@ -27,29 +28,25 @@ def create_app(config_name=None):
     
     MongoDB.init_app(app)
     
-    cors_origins = app.config['CORS_ORIGINS']
-    if app.config['DEBUG']:
-        cors_origins = ['*']
-    
-    CORS(app, origins=cors_origins)
+    CORS(app, origins='*', supports_credentials=True)
     mail = Mail(app)
     
-    # Initialize SocketIO with eventlet
+    # Initialize SocketIO - THREADING MODE (no gevent)
     socketio = SocketIO(
-    app, 
-    cors_allowed_origins='*',
-    async_mode='gevent',
-    logger=True,
-    engineio_logger=True
-)
-
+        app, 
+        cors_allowed_origins='*',
+        async_mode='threading',  # Use threading instead of gevent
+        logger=False,
+        engineio_logger=False,
+        ping_timeout=60,
+        ping_interval=25
+    )
     
     app.mail = mail
     app.socketio = socketio
     
     return app, socketio
 
-# Create app and socketio
 app, socketio = create_app()
 mail = app.mail
 
