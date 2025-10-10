@@ -36,14 +36,13 @@ def create_app(config_name=None):
     
     # Initialize SocketIO with eventlet
     socketio = SocketIO(
-        app, 
-        cors_allowed_origins='*',  # Allow all origins
-        async_mode='eventlet',     # Use eventlet
-        logger=True,
-        engineio_logger=True,
-        ping_timeout=60,
-        ping_interval=25
-    )
+    app, 
+    cors_allowed_origins='*',
+    async_mode='gevent',
+    logger=True,
+    engineio_logger=True
+)
+
     
     app.mail = mail
     app.socketio = socketio
