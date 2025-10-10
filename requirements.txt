@@ -11,19 +11,15 @@ dnspython==2.4.2
 # Security
 Werkzeug==3.0.1
 
-# Server
+# Production Server
 gunicorn==21.2.0
-eventlet==0.33.3
 
-# WebSocket
+# WebSocket & Async
 python-socketio==5.10.0
+eventlet==0.33.3
 
 # Date/Time
 pytz==2023.3
 
 # Utilities
 python-dotenv==1.0.0
-
-# Async support
-gevent==23.9.1
-gevent-websocket==0.10.1
