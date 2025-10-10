@@ -12,7 +12,8 @@ import pytz
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import secrets
-
+from dotenv import load_dotenv
+load_dotenv()
 # ==================== APP INITIALIZATION ====================
 
 def create_app(config_name=None):
@@ -732,4 +733,13 @@ def dashboard():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'])
+    debug = os.environ.get('FLASK_ENV') != 'production'
+    
+    # Run with SocketIO
+    socketio.run(
+        app, 
+        host='0.0.0.0', 
+        port=port, 
+        debug=debug,
+        allow_unsafe_werkzeug=True  # For production
+    )
