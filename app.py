@@ -739,5 +739,6 @@ if __name__ == '__main__':
         port=port, 
         debug=False,
         use_reloader=False,
-        log_output=True
+        log_output=True,
+        allow_unsafe_werkzeug=True
     )
