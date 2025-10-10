@@ -1,0 +1,10 @@
+conda env create -f environment.yml
+
+
+conda activate attendance
+
+
+python -m pip list
+
+
+python app.py

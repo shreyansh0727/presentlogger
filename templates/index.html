@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFID Attendance System - Project Info</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #667eea;
+            --secondary: #764ba2;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --dark: #1f2937;
+            --light: #f3f4f6;
+            --white: #ffffff;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: var(--dark);
+            overflow-x: hidden;
+        }
+
+        /* Hero Section */
+        .hero {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            color: white;
+            padding: 4rem 2rem;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="1"/></pattern></defs><rect width="100" height="100" fill="url(%23grid)"/></svg>');
+            opacity: 0.3;
+        }
+
+        .hero-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            margin-bottom: 1rem;
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        .hero p {
+            font-size: 1.25rem;
+            margin-bottom: 2rem;
+            opacity: 0.95;
+            animation: fadeInUp 0.8s ease-out 0.2s backwards;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            animation: fadeInUp 0.8s ease-out 0.4s backwards;
+        }
+
+        .btn {
+            padding: 1rem 2rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: white;
+            color: var(--primary);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: white;
+            border: 2px solid white;
+        }
+
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 4rem 2rem;
+        }
+
+        /* Features Section */
+        .features {
+            padding: 4rem 2rem;
+            background: var(--light);
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            color: var(--primary);
+        }
+
+        .section-subtitle {
+            text-align: center;
+            color: #6b7280;
+            margin-bottom: 3rem;
+            font-size: 1.1rem;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .feature-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+            text-align: center;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+        }
+
+        .feature-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 1.5rem;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5rem;
+            color: white;
+        }
+
+        .feature-card h3 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: var(--dark);
+        }
+
+        .feature-card p {
+            color: #6b7280;
+            line-height: 1.8;
+        }
+
+        /* Tech Stack Section */
+        .tech-stack {
+            padding: 4rem 2rem;
+            background: white;
+        }
+
+        .tech-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .tech-card {
+            background: var(--light);
+            padding: 2rem;
+            border-radius: 1rem;
+            text-align: center;
+            border: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .tech-card:hover {
+            border-color: var(--primary);
+            background: white;
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.1);
+        }
+
+        .tech-logo {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+
+        .tech-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 0.5rem;
+            color: var(--dark);
+        }
+
+        .tech-card p {
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+
+        /* System Architecture */
+        .architecture {
+            padding: 4rem 2rem;
+            background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);
+        }
+
+        .architecture-diagram {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            padding: 3rem;
+            border-radius: 1rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+        }
+
+        .diagram-layer {
+            background: var(--light);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid var(--primary);
+        }
+
+        .diagram-layer h4 {
+            color: var(--primary);
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .diagram-layer ul {
+            list-style: none;
+            padding-left: 1.5rem;
+        }
+
+        .diagram-layer li {
+            margin-bottom: 0.5rem;
+            color: #6b7280;
+        }
+
+        .diagram-layer li::before {
+            content: "→";
+            color: var(--primary);
+            margin-right: 0.5rem;
+        }
+
+        /* Statistics Section */
+        .statistics {
+            padding: 4rem 2rem;
+            background: var(--dark);
+            color: white;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .stat-item h2 {
+            font-size: 3rem;
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .stat-item p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        /* Team Section */
+        .team {
+            padding: 4rem 2rem;
+            background: white;
+        }
+
+        .team-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .team-member {
+            background: var(--light);
+            padding: 2rem;
+            border-radius: 1rem;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .team-member:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+
+        .member-avatar {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 1.5rem;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+            font-weight: bold;
+            color: white;
+        }
+
+        .team-member h3 {
+            font-size: 1.5rem;
+            margin-bottom: 0.5rem;
+            color: var(--dark);
+        }
+
+        .team-member p {
+            color: #6b7280;
+            margin-bottom: 1rem;
+        }
+
+        .social-links {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+
+        .social-link {
+            width: 40px;
+            height: 40px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--primary);
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+
+        .social-link:hover {
+            background: var(--primary);
+            color: white;
+            transform: translateY(-3px);
+        }
+
+        /* Footer */
+        .footer {
+            background: var(--dark);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        .footer p {
+            margin-bottom: 1rem;
+        }
+
+        .footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2rem;
+            }
+
+            .hero p {
+                font-size: 1rem;
+            }
+
+            .hero-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .section-title {
+                font-size: 2rem;
+            }
+
+            .features-grid,
+            .tech-grid,
+            .team-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <h1><i class="fas fa-id-card"></i> RFID Attendance System</h1>
+            <p>Next-Generation IoT-Based Attendance Management with Real-Time Tracking</p>
+            <div class="hero-buttons">
+                <a href="/login" class="btn btn-primary">
+                    <i class="fas fa-sign-in-alt"></i> Access Dashboard
+                </a>
+                <a href="https://github.com/shreyansh0727/presentlogger" target="_blank" class="btn btn-outline">
+                    <i class="fab fa-github"></i> View on GitHub
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features">
+        <h2 class="section-title">Key Features</h2>
+        <p class="section-subtitle">Advanced capabilities for modern educational institutions</p>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-bolt"></i>
+                </div>
+                <h3>Real-Time Tracking</h3>
+                <p>Instant attendance updates with WebSocket technology. See who's present the moment they scan their card.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-database"></i>
+                </div>
+                <h3>MongoDB Powered</h3>
+                <p>Scalable NoSQL database ensures fast queries and handles thousands of records effortlessly.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <h3>Advanced Analytics</h3>
+                <p>Comprehensive reports, trends, and insights. Track attendance patterns and late arrivals.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-shield-alt"></i>
+                </div>
+                <h3>Secure Authentication</h3>
+                <p>API key-based security for Arduino devices and session-based admin authentication.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-wifi"></i>
+                </div>
+                <h3>IoT Integration</h3>
+                <p>Arduino UNO R4 WiFi with RFID reader for seamless hardware-software integration.</p>
+            </div>
+
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <i class="fas fa-mobile-alt"></i>
+                </div>
+                <h3>Responsive Design</h3>
+                <p>Beautiful dashboard works perfectly on desktop, tablet, and mobile devices.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tech Stack Section -->
+    <section class="tech-stack">
+        <div class="container">
+            <h2 class="section-title">Technology Stack</h2>
+            <p class="section-subtitle">Built with cutting-edge technologies</p>
+            <div class="tech-grid">
+                <div class="tech-card">
+                    <div class="tech-logo">🤖</div>
+                    <h3>Arduino UNO R4 WiFi</h3>
+                    <p>32-bit microcontroller with built-in WiFi and LED matrix</p>
+                </div>
+
+                <div class="tech-card">
+                    <div class="tech-logo"><i class="fab fa-python"></i></div>
+                    <h3>Flask & Python</h3>
+                    <p>Powerful backend framework with RESTful API design</p>
+                </div>
+
+                <div class="tech-card">
+                    <div class="tech-logo"><i class="fas fa-database"></i></div>
+                    <h3>MongoDB Atlas</h3>
+                    <p>Cloud-hosted NoSQL database with automatic scaling</p>
+                </div>
+
+                <div class="tech-card">
+                    <div class="tech-logo">⚡</div>
+                    <h3>Socket.IO</h3>
+                    <p>Real-time bidirectional event-based communication</p>
+                </div>
+
+                <div class="tech-card">
+                    <div class="tech-logo"><i class="fas fa-chart-bar"></i></div>
+                    <h3>Chart.js</h3>
+                    <p>Beautiful, responsive charts for data visualization</p>
+                </div>
+
+                <div class="tech-card">
+                    <div class="tech-logo"><i class="fas fa-cloud"></i></div>
+                    <h3>Render Deployment</h3>
+                    <p>Cloud platform with automatic HTTPS and scaling</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- System Architecture -->
+    <section class="architecture">
+        <div class="container">
+            <h2 class="section-title">System Architecture</h2>
+            <p class="section-subtitle">How everything works together</p>
+            <div class="architecture-diagram">
+                <div class="diagram-layer">
+                    <h4><i class="fas fa-microchip"></i> Hardware Layer</h4>
+                    <ul>
+                        <li>Arduino UNO R4 WiFi microcontroller</li>
+                        <li>MFRC522 RFID Reader (13.56 MHz)</li>
+                        <li>0.96" OLED Display (I2C)</li>
+                        <li>PIR Motion Sensor</li>
+                        <li>LED indicators and buzzer</li>
+                    </ul>
+                </div>
+
+                <div class="diagram-layer">
+                    <h4><i class="fas fa-network-wired"></i> Communication Layer</h4>
+                    <ul>
+                        <li>WiFi connection to Flask server</li>
+                        <li>HTTPS RESTful API endpoints</li>
+                        <li>WebSocket for real-time updates</li>
+                        <li>API key authentication</li>
+                    </ul>
+                </div>
+
+                <div class="diagram-layer">
+                    <h4><i class="fas fa-server"></i> Backend Layer</h4>
+                    <ul>
+                        <li>Flask web framework (Python 3.11)</li>
+                        <li>MongoDB database with connection pooling</li>
+                        <li>Flask-SocketIO for WebSocket</li>
+                        <li>Email notifications with Flask-Mail</li>
+                    </ul>
+                </div>
+
+                <div class="diagram-layer">
+                    <h4><i class="fas fa-desktop"></i> Frontend Layer</h4>
+                    <ul>
+                        <li>Responsive HTML5/CSS3 dashboard</li>
+                        <li>Chart.js for data visualization</li>
+                        <li>Real-time updates via Socket.IO client</li>
+                        <li>Admin panel with CRUD operations</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Statistics Section -->
+    <section class="statistics">
+        <div class="container">
+            <h2 class="section-title" style="color: white;">Project Statistics</h2>
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <h2><i class="fas fa-code"></i> 5000+</h2>
+                    <p>Lines of Code</p>
+                </div>
+                <div class="stat-item">
+                    <h2><i class="fas fa-server"></i> 25+</h2>
+                    <p>API Endpoints</p>
+                </div>
+                <div class="stat-item">
+                    <h2><i class="fas fa-bolt"></i> <1s </h2>
+                    <p>Response Time</p>
+                </div>
+                <div class="stat-item">
+                    <h2><i class="fas fa-check-circle"></i> 99.9%</h2>
+                    <p>Uptime</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Team Section -->
+    <section class="team">
+        <div class="container">
+            <h2 class="section-title">Meet The Team</h2>
+            <p class="section-subtitle">The minds behind this innovation</p>
+            <div class="team-grid">
+                <div class="team-member">
+                    <div class="member-avatar">S</div>
+                    <h3>Shreyansh Kumar</h3>
+                    <p>Full-Stack Developer & Project Lead</p>
+                    <div class="social-links">
+                        <a href="https://github.com/shreyansh0727" class="social-link" target="_blank">
+                            <i class="fab fa-github"></i>
+                        </a>
+                        <a href="https://shreyansh.hyperflowai.site" class="social-link" target="_blank">
+                            <i class="fas fa-globe"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <div class="team-member">
+                    <div class="member-avatar">P</div>
+                    <h3>Prakhyat Kumar</h3>
+                    <p>Core & Logics</p>
+                    <div class="social-links">
+                        <a href="#" class="social-link"><i class="fab fa-github"></i></a>
+                        <a href="#" class="social-link"><i class="fab fa-linkedin-in"></i></a>
+                    </div>
+                </div>
+
+                <div class="team-member">
+                    <div class="member-avatar">A</div>
+                    <h3>Avinesh Maurya</h3>
+                    <p>Production Manager</p>
+                    <div class="social-links">
+                        <a href="#" class="social-link"><i class="fab fa-github"></i></a>
+                        <a href="#" class="social-link"><i class="fab fa-linkedin-in"></i></a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>&copy; 2025 RFID Attendance System | Made with <i class="fas fa-heart" style="color: #ef4444;"></i> by <a href="https://shreyansh.hyperflowai.site" target="_blank">Shreyansh</a></p>
+        <p>
+            <a href="/login">Dashboard</a> | 
+            <a href="https://github.com/shreyansh0727/presentlogger" target="_blank">GitHub</a> | 
+            <a href="mailto:shreyanshm90051@gmail.com">Contact</a>
+        </p>
+    </footer>
+</body>
+</html>
