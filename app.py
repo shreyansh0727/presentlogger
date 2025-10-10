@@ -500,6 +500,14 @@ def get_current_api_key():
 @login_required
 def regenerate_api_key():
     try:
+        # DEACTIVATE ALL OLD KEYS FIRST
+        collection = ApiKey.get_collection()
+        collection.update_many(
+            {'is_active': True},
+            {'$set': {'is_active': False, 'deactivated_at': datetime.utcnow()}}
+        )
+        
+        # Generate new key
         new_key = secrets.token_urlsafe(32)
         key = ApiKey.create(new_key, 'Arduino Device Key', session.get('user_id'))
         
