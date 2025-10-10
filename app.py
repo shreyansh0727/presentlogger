@@ -17,7 +17,6 @@ load_dotenv()
 # ==================== APP INITIALIZATION ====================
 
 def create_app(config_name=None):
-    """Application factory"""
     app = Flask(__name__)
     
     if config_name is None:
@@ -34,12 +33,14 @@ def create_app(config_name=None):
     
     CORS(app, origins=cors_origins)
     mail = Mail(app)
+    
+    # Initialize SocketIO with eventlet
     socketio = SocketIO(
         app, 
-        cors_allowed_origins=cors_origins,
-        async_mode='threading',
-        logger=False,
-        engineio_logger=False,
+        cors_allowed_origins='*',  # Allow all origins
+        async_mode='eventlet',     # Use eventlet
+        logger=True,
+        engineio_logger=True,
         ping_timeout=60,
         ping_interval=25
     )
@@ -47,11 +48,11 @@ def create_app(config_name=None):
     app.mail = mail
     app.socketio = socketio
     
-    return app
+    return app, socketio
 
-app = create_app()
+# Create app and socketio
+app, socketio = create_app()
 mail = app.mail
-socketio = app.socketio
 
 IST = pytz.timezone('Asia/Kolkata')
 system_start_time = datetime.now()
