@@ -1,11 +1,44 @@
-Flask==3.0.0
-Flask-CORS==4.0.0
-Flask-Mail==0.9.1
-Flask-SocketIO==5.3.5
-pymongo==4.6.0
-dnspython==2.4.2
-Werkzeug==3.0.1
-python-socketio==5.10.0
-simple-websocket==1.0.0
-pytz==2023.3
-python-dotenv==1.0.0
+# Core Flask Framework
+Flask==3.0.3
+Werkzeug==3.0.3
+
+# Flask Extensions
+Flask-CORS==4.0.1
+Flask-Mail==0.10.0
+Flask-SocketIO==5.3.6
+Flask-Limiter==3.8.0
+
+# Database - MongoDB
+pymongo==4.8.0
+dnspython==2.6.1
+
+# WebSocket Support
+python-socketio==5.11.3
+python-engineio==4.9.1
+eventlet==0.36.1
+gevent==24.2.1
+gevent-websocket==0.10.1
+
+# Security & Authentication
+Werkzeug==3.0.3
+email-validator==2.2.0
+
+# Date & Time
+pytz==2024.1
+
+# Data Processing & Export
+pandas==2.2.2
+openpyxl==3.1.5
+XlsxWriter==3.2.0
+
+# Utilities
+python-dotenv==1.0.1
+qrcode==7.4.2
+Pillow==10.4.0
+schedule==1.2.2
+
+# Production Server
+gunicorn==22.0.0
+
+# Development Tools (optional - remove for production)
+python-multipart==0.0.9
