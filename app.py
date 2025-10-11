@@ -89,11 +89,18 @@ def api_key_required(f):
     def decorated_function(*args, **kwargs):
         api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
         
-        if not api_key or not ApiKey.validate_key(api_key):
-            return jsonify({'success': False, 'error': 'Invalid or missing API key'}), 401
+        # Check MongoDB API keys
+        if api_key and ApiKey.validate_key(api_key):
+            return f(*args, **kwargs)
         
-        return f(*args, **kwargs)
+        # FALLBACK: Check config VALID_API_KEYS (for Arduino compatibility)
+        if api_key and api_key in app.config['VALID_API_KEYS']:
+            return f(*args, **kwargs)
+        
+        return jsonify({'success': False, 'error': 'Invalid or missing API key'}), 401
+    
     return decorated_function
+
 
 # ==================== INITIALIZATION ====================
 
