@@ -94,7 +94,7 @@ def api_key_required(f):
             return f(*args, **kwargs)
         
         # FALLBACK: Check config VALID_API_KEYS (for Arduino compatibility)
-        if api_key and api_key in app.config['VALID_API_KEYS']:
+        if api_key and api_key in app.config['API_KEYS']:
             return f(*args, **kwargs)
         
         return jsonify({'success': False, 'error': 'Invalid or missing API key'}), 401
