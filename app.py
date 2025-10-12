@@ -14,7 +14,25 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import secrets
 import time
+import requests
 
+EMAIL_API_URL = "https://email-service-474903.uc.r.appspot.com/send-email"
+EMAIL_API_KEY = "jhfhhfh87373899874djwjwhqrmvnbi8976jj"
+
+def send_email_microservice(to, subject, html, cc=None, bcc=None):
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": EMAIL_API_KEY
+    }
+    payload = {
+        "to": to,
+        "subject": subject,
+        "html": html,
+        "cc": cc if cc else [],
+        "bcc": bcc if bcc else []
+    }
+    response = requests.post(EMAIL_API_URL, headers=headers, json=payload)
+    return response.status_code, response.json()
 # ==================== APP INITIALIZATION ====================
 
 def create_app(config_name=None):
@@ -1151,167 +1169,188 @@ def register_student_from_unknown(card_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 def send_late_arrival_email(student, arrival_time, late_by_minutes):
-    """Send email for late arrival"""
+    """Send email for late arrival using microservice API"""
     settings = SchoolSettings.get_settings()
     if not settings.get('late_arrival_email') or not settings.get('email_notifications_enabled'):
         return
-    
-    try:
-        # Check if student has parent email
-        if not student.get('parent_email'):
-            print(f"⚠️ No parent email for {student.get('name')}")
-            return
-        
-        msg = Message(
-            subject=f"Late Arrival Alert - {student['name']}",
-            sender=app.config['MAIL_USERNAME'],
-            recipients=[student['parent_email']]
-        )
-        
-        msg.html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; padding: 20px;">
-            <div style="max-width: 600px; margin: 0 auto; border: 2px solid #f59e0b; border-radius: 10px; padding: 20px;">
-                <h2 style="color: #f59e0b;">⚠️ Late Arrival Notification</h2>
-                <p>Dear Parent,</p>
-                <p>This is to inform you that <strong>{student['name']}</strong> (Reg. No: {student['reg_no']}) arrived late to school today.</p>
-                
-                <div style="background: #fef3c7; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                    <p><strong>Details:</strong></p>
-                    <ul>
-                        <li>Student: {student['name']}</li>
-                        <li>Class: {student.get('class_name', 'N/A')}</li>
-                        <li>Registration No: {student['reg_no']}</li>
-                        <li>Arrival Time: {arrival_time}</li>
-                        <li>School Start Time: {settings.get('school_start_time', '09:00:00')}</li>
-                        <li>Late By: {late_by_minutes} minutes</li>
-                        <li>Date: {datetime.now(IST).strftime('%Y-%m-%d')}</li>
-                    </ul>
-                </div>
-                
-                <p>Please ensure your child arrives on time to avoid missing important lessons.</p>
-                
-                <p style="color: #6b7280; font-size: 0.875rem; margin-top: 30px;">
-                    This is an automated notification from the School Attendance System.
-                </p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        mail.send(msg)
-        print(f"✅ Late arrival email sent to {student['parent_email']} ({student['name']})")
-        
-    except Exception as e:
-        print(f"❌ Failed to send late arrival email: {e}")
 
+    if not student.get('parent_email'):
+        print(f"⚠️ No parent email for {student.get('name')}")
+        return
+
+    subject = f"Late Arrival Alert - {student['name']}"
+    html = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+        <div style="max-width: 600px; margin: 0 auto; border: 2px solid #f59e0b; border-radius: 10px; padding: 20px;">
+            <h2 style="color: #f59e0b;">⚠️ Late Arrival Notification</h2>
+            <p>Dear Parent,</p>
+            <p>This is to inform you that <strong>{student['name']}</strong> (Reg. No: {student['reg_no']}) arrived late to school today.</p>
+            
+            <div style="background: #fef3c7; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Details:</strong></p>
+                <ul>
+                    <li>Student: {student['name']}</li>
+                    <li>Class: {student.get('class_name', 'N/A')}</li>
+                    <li>Registration No: {student['reg_no']}</li>
+                    <li>Arrival Time: {arrival_time}</li>
+                    <li>School Start Time: {settings.get('school_start_time', '09:00:00')}</li>
+                    <li>Late By: {late_by_minutes} minutes</li>
+                    <li>Date: {datetime.now().strftime('%Y-%m-%d')}</li>
+                </ul>
+            </div>
+            
+            <p>Please ensure your child arrives on time to avoid missing important lessons.</p>
+            
+            <p style="color: #6b7280; font-size: 0.875rem; margin-top: 30px;">
+                This is an automated notification from the School Attendance System.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+    payload = {
+        "to": student['parent_email'],
+        "subject": subject,
+        "html": html
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": EMAIL_API_KEY
+    }
+
+    try:
+        response = requests.post(EMAIL_API_URL, json=payload, headers=headers)
+        if response.status_code == 200 and response.json().get("success"):
+            print(f"✅ Late arrival email sent to {student['parent_email']} ({student['name']})")
+        else:
+            print(f"❌ Failed to send late arrival email: {response.text}")
+    except Exception as e:
+        print(f"❌ Email microservice error: {e}")
 
 
 def send_monthly_report_email(student, report_data):
-    """Send monthly attendance report"""
+    """Send monthly attendance report via microservice API"""
     settings = SchoolSettings.get_settings()
     if not settings.get('monthly_report_email') or not settings.get('email_notifications_enabled'):
         return
-    
-    try:
-        msg = Message(
-            subject=f"Monthly Attendance Report - {student['name']}",
-            sender=app.config['MAIL_USERNAME'],
-            recipients=[student['parent_email']]
-        )
-        
-        msg.html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; padding: 20px;">
-            <div style="max-width: 600px; margin: 0 auto; border: 2px solid #3b82f6; border-radius: 10px; padding: 20px;">
-                <h2 style="color: #3b82f6;">📊 Monthly Attendance Report</h2>
-                <p>Dear Parent,</p>
-                <p>Here is the monthly attendance summary for <strong>{student['name']}</strong>.</p>
-                
-                <div style="background: #dbeafe; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                    <p><strong>Student Information:</strong></p>
-                    <ul>
-                        <li>Name: {student['name']}</li>
-                        <li>Class: {student['class_name']}</li>
-                        <li>Registration No: {student['reg_no']}</li>
-                    </ul>
-                    
-                    <p><strong>Attendance Summary:</strong></p>
-                    <ul>
-                        <li>Total School Days: {report_data['total_days']}</li>
-                        <li>Days Present: {report_data['present_days']}</li>
-                        <li>Days Absent: {report_data['absent_days']}</li>
-                        <li>Late Arrivals: {report_data['late_count']}</li>
-                        <li>Attendance Rate: {report_data['attendance_rate']}%</li>
-                    </ul>
-                </div>
-                
-                <p style="color: #6b7280; font-size: 0.875rem; margin-top: 30px;">
-                    This is an automated monthly report from the School Attendance System.
-                </p>
+
+    if not student.get('parent_email'):
+        print(f"⚠️ No parent email for {student.get('name')}")
+        return
+
+    subject = f"Monthly Attendance Report - {student['name']}"
+    html = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+        <div style="max-width: 600px; margin: 0 auto; border: 2px solid #3b82f6; border-radius: 10px; padding: 20px;">
+            <h2 style="color: #3b82f6;">📊 Monthly Attendance Report</h2>
+            <p>Dear Parent,</p>
+            <p>Here is the monthly attendance summary for <strong>{student['name']}</strong>.</p>
+            <div style="background: #dbeafe; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Student Information:</strong></p>
+                <ul>
+                    <li>Name: {student['name']}</li>
+                    <li>Class: {student['class_name']}</li>
+                    <li>Registration No: {student['reg_no']}</li>
+                </ul>
+                <p><strong>Attendance Summary:</strong></p>
+                <ul>
+                    <li>Total School Days: {report_data['total_days']}</li>
+                    <li>Days Present: {report_data['present_days']}</li>
+                    <li>Days Absent: {report_data['absent_days']}</li>
+                    <li>Late Arrivals: {report_data['late_count']}</li>
+                    <li>Attendance Rate: {report_data['attendance_rate']}%</li>
+                </ul>
             </div>
-        </body>
-        </html>
-        """
-        
-        mail.send(msg)
-        print(f"✅ Monthly report sent to {student['parent_email']}")
-        
+            <p style="color: #6b7280; font-size: 0.875rem; margin-top: 30px;">
+                This is an automated monthly report from the School Attendance System.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+    payload = {
+        "to": student['parent_email'],
+        "subject": subject,
+        "html": html
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": EMAIL_API_KEY
+    }
+
+    try:
+        response = requests.post(EMAIL_API_URL, json=payload, headers=headers)
+        result = response.json()
+        if response.status_code == 200 and result.get("success", False):
+            print(f"✅ Monthly report sent to {student['parent_email']}")
+        else:
+            print(f"❌ Failed to send monthly report: {result.get('error', response.text)}")
     except Exception as e:
-        print(f"❌ Failed to send monthly report: {e}")
+        print(f"❌ Error sending monthly report: {e}")
 
 
 def send_absence_alert_email(student, absence_days):
-    """Send alert for consecutive absences"""
+    """Send alert for consecutive absences via microservice API"""
     settings = SchoolSettings.get_settings()
     if not settings.get('absence_alert_email') or not settings.get('email_notifications_enabled'):
         return
-    
-    try:
-        msg = Message(
-            subject=f"Absence Alert - {student['name']} ({absence_days} consecutive days)",
-            sender=app.config['MAIL_USERNAME'],
-            recipients=[student['parent_email']]
-        )
-        
-        msg.html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; padding: 20px;">
-            <div style="max-width: 600px; margin: 0 auto; border: 2px solid #ef4444; border-radius: 10px; padding: 20px;">
-                <h2 style="color: #ef4444;">🚨 Consecutive Absence Alert</h2>
-                <p>Dear Parent,</p>
-                <p>This is an urgent notification regarding <strong>{student['name']}</strong>'s attendance.</p>
-                
-                <div style="background: #fee2e2; padding: 15px; border-radius: 5px; margin: 20px 0;">
-                    <p><strong>Alert Details:</strong></p>
-                    <ul>
-                        <li>Student: {student['name']}</li>
-                        <li>Class: {student['class_name']}</li>
-                        <li>Registration No: {student['reg_no']}</li>
-                        <li>Consecutive Days Absent: <strong style="color: #ef4444;">{absence_days} days</strong></li>
-                        <li>Alert Date: {datetime.now(IST).strftime('%Y-%m-%d')}</li>
-                    </ul>
-                </div>
-                
-                <p><strong>Action Required:</strong></p>
-                <p>Your child has been absent for {absence_days} consecutive days. Please contact the school immediately to inform us about the reason for absence.</p>
-                
-                <p>If this absence is due to illness or emergency, please provide appropriate documentation.</p>
-                
-                <p style="color: #6b7280; font-size: 0.875rem; margin-top: 30px;">
-                    This is an automated alert from the School Attendance System.
-                </p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        mail.send(msg)
-        print(f"✅ Absence alert sent to {student['parent_email']} ({absence_days} days)")
-        
-    except Exception as e:
-        print(f"❌ Failed to send absence alert: {e}")
 
+    if not student.get('parent_email'):
+        print(f"⚠️ No parent email for {student.get('name')}")
+        return
+
+    subject = f"Absence Alert - {student['name']} ({absence_days} consecutive days)"
+    html = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+        <div style="max-width: 600px; margin: 0 auto; border: 2px solid #ef4444; border-radius: 10px; padding: 20px;">
+            <h2 style="color: #ef4444;">🚨 Consecutive Absence Alert</h2>
+            <p>Dear Parent,</p>
+            <p>This is an urgent notification regarding <strong>{student['name']}</strong>'s attendance.</p>
+            <div style="background: #fee2e2; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>Alert Details:</strong></p>
+                <ul>
+                    <li>Student: {student['name']}</li>
+                    <li>Class: {student['class_name']}</li>
+                    <li>Registration No: {student['reg_no']}</li>
+                    <li>Consecutive Days Absent: <strong style="color: #ef4444;">{absence_days} days</strong></li>
+                    <li>Alert Date: {datetime.now().strftime('%Y-%m-%d')}</li>
+                </ul>
+            </div>
+            <p><strong>Action Required:</strong></p>
+            <p>Your child has been absent for {absence_days} consecutive days. Please contact the school immediately to inform us about the reason for absence.</p>
+            <p>If this absence is due to illness or emergency, please provide appropriate documentation.</p>
+            <p style="color: #6b7280; font-size: 0.875rem; margin-top: 30px;">
+                This is an automated alert from the School Attendance System.
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+    payload = {
+        "to": student['parent_email'],
+        "subject": subject,
+        "html": html
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-KEY": EMAIL_API_KEY
+    }
+
+    try:
+        response = requests.post(EMAIL_API_URL, json=payload, headers=headers)
+        result = response.json()
+        if response.status_code == 200 and result.get("success", False):
+            print(f"✅ Absence alert sent to {student['parent_email']} ({absence_days} days)")
+        else:
+            print(f"❌ Failed to send absence alert: {result.get('error', response.text)}")
+    except Exception as e:
+        print(f"❌ Error sending absence alert: {e}")
 
 def check_consecutive_absences():
     """Check for students with consecutive absences"""
@@ -1419,7 +1458,7 @@ def update_school_settings():
 @app.route('/api/notifications/test-email', methods=['POST'])
 @login_required
 def test_email_notification():
-    """Send test email"""
+    """Send test email via cloud email microservice"""
     try:
         data = request.get_json()
         email = data.get('email')
@@ -1427,13 +1466,8 @@ def test_email_notification():
         if not email:
             return jsonify({'success': False, 'error': 'Email required'}), 400
         
-        msg = Message(
-            subject="Test Email - School Attendance System",
-            sender=app.config['MAIL_USERNAME'],
-            recipients=[email]
-        )
-        
-        msg.html = """
+        subject = "Test Email - School Attendance System"
+        html = """
         <html>
         <body style="font-family: Arial; padding: 20px;">
             <div style="max-width: 600px; margin: 0 auto; border: 2px solid #10b981; padding: 20px; border-radius: 10px;">
@@ -1444,14 +1478,26 @@ def test_email_notification():
         </body>
         </html>
         """
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-API-KEY": EMAIL_API_KEY
+        }
+        payload = {
+            "to": email,
+            "subject": subject,
+            "html": html
+        }
         
-        mail.send(msg)
-        return jsonify({'success': True, 'message': 'Test email sent'})
+        response = requests.post(EMAIL_API_URL, json=payload, headers=headers)
+        result = response.json()
+        if response.status_code == 200 and result.get("success", False):
+            return jsonify({'success': True, 'message': 'Test email sent'})
+        else:
+            return jsonify({'success': False, 'error': result.get('error', response.text)}), 500
         
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
-
-
 # ==================== Scheduled Tasks ====================
 
 def schedule_notifications():
@@ -1509,4 +1555,5 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
+
 
