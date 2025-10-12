@@ -42,3 +42,4 @@ gunicorn==22.0.0
 
 # Development Tools (optional - remove for production)
 python-multipart==0.0.9
+requests==2.31.0
