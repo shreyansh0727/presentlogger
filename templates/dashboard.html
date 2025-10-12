@@ -19,90 +19,87 @@
 
 /* Light Theme (Default) */
 :root[data-theme="light"] {
-    --primary: #667eea;
-    --secondary: #764ba2;
-    --success: #10b981;
-    --warning: #f59e0b;
-    --danger: #ef4444;
-    --info: #3b82f6;
-    --dark: #1f2937;
-    --light: #f3f4f6;
-    --white: #ffffff;
-    --border: #e5e7eb;
-    --text-dark: #1f2937;
-    --text-light: #6b7280;
-    --shadow: 0 4px 6px rgba(0,0,0,0.1);
-    --bg-main: #f9fafb;
-    --card-bg: #ffffff;
-    --navbar-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --blur-amount: 0px;
-    --card-opacity: 1;
+  --primary: #6366f1; /* Elegant Indigo */
+  --secondary: #8b5cf6; /* Vibrant Violet */
+  --success: #0ea5e9; /* Ocean Blue */
+  --warning: #f59e0b; /* Honey Amber */
+  --danger: #dc2626; /* Scarlet Bloom */
+  --info: #3b82f6; /* Sky Signal */
+  --dark: #111827; /* Deep Charcoal */
+  --light: #f9fafb; /* Mist White */
+  --white: #ffffff;
+  --border: #e5e7eb;
+  --text-dark: #111827;
+  --text-light: #6b7280;
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+  --bg-main: linear-gradient(135deg, #f9fafb, #eef2ff);
+  --card-bg: #ffffff;
+  --navbar-bg: linear-gradient(135deg, #6366f1, #8b5cf6);
+  --blur-amount: 0px;
+  --card-opacity: 1;
 }
 
-/* Dark Theme */
 :root[data-theme="dark"] {
-    --primary: #818cf8;
-    --secondary: #a78bfa;
-    --success: #34d399;
-    --warning: #fbbf24;
-    --danger: #f87171;
-    --info: #60a5fa;
-    --dark: #1f2937;
-    --light: #1f2937;
-    --white: #111827;
-    --border: #374151;
-    --text-dark: #f3f4f6;
-    --text-light: #9ca3af;
-    --shadow: 0 4px 6px rgba(0,0,0,0.3);
-    --bg-main: #0f172a;
-    --card-bg: #1e293b;
-    --navbar-bg: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    --blur-amount: 0px;
-    --card-opacity: 1;
+  --primary: #818cf8; /* Electric Indigo */
+  --secondary: #c084fc; /* Radiant Orchid */
+  --success: #22d3ee; /* Neon Aqua */
+  --warning: #facc15; /* Golden Ember */
+  --danger: #fb7185; /* Coral Flame */
+  --info: #60a5fa; /* Azure Edge */
+  --dark: #0f172a; /* Midnight Abyss */
+  --light: #1e293b; /* Deep Smoke */
+  --white: #0b1120; /* Ink */
+  --border: #334155;
+  --text-dark: #f1f5f9;
+  --text-light: #94a3b8;
+  --shadow: 0 6px 30px rgba(0, 0, 0, 0.4);
+  --bg-main: linear-gradient(135deg, #0f172a, #1e293b);
+  --card-bg: #1e293b;
+  --navbar-bg: linear-gradient(135deg, #312e81, #1e3a8a);
+  --blur-amount: 0px;
+  --card-opacity: 1;
 }
 
-/* Blur Transparent Light */
 :root[data-theme="blur-light"] {
-    --primary: #667eea;
-    --secondary: #764ba2;
-    --success: #10b981;
-    --warning: #f59e0b;
-    --danger: #ef4444;
-    --info: #3b82f6;
-    --dark: #1f2937;
-    --light: #f3f4f6;
-    --white: rgba(255, 255, 255, 0.7);
-    --border: rgba(229, 231, 235, 0.3);
-    --text-dark: #1f2937;
-    --text-light: #6b7280;
-    --shadow: 0 8px 32px rgba(0,0,0,0.1);
-    --bg-main: linear-gradient(135deg, #667eea20, #764ba220);
-    --card-bg: rgba(255, 255, 255, 0.7);
-    --navbar-bg: rgba(102, 126, 234, 0.8);
-    --blur-amount: 10px;
-    --card-opacity: 0.7;
+  --primary: #6366f1;
+  --secondary: #8b5cf6;
+  --success: #0ea5e9;
+  --warning: #f59e0b;
+  --danger: #dc2626;
+  --info: #3b82f6;
+  --dark: #111827;
+  --light: rgba(249, 250, 251, 0.8);
+  --white: rgba(255, 255, 255, 0.6);
+  --border: rgba(229, 231, 235, 0.3);
+  --text-dark: #111827;
+  --text-light: #6b7280;
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+  --bg-main: linear-gradient(135deg, #6366f120, #8b5cf620);
+  --card-bg: rgba(255, 255, 255, 0.65);
+  --navbar-bg: rgba(99, 102, 241, 0.8);
+  --blur-amount: 15px;
+  --card-opacity: 0.75;
 }
 
-/* Blur Transparent Dark */
 :root[data-theme="blur-dark"] {
-    --primary: #818cf8;
-    --secondary: #a78bfa;
-    --success: #34d399;
-    --warning: #fbbf24;
-    --danger: #f87171;
-    --info: #60a5fa;
-    --dark: #1f2937;
-    --light: rgba(31, 41, 55, 0.5);
-    --white: rgba(17, 24, 39, 0.7);
-    --border: rgba(55, 65, 81, 0.3);
-    --text-dark: #f3f4f6;
-    --text-light: #9ca3af;
-    --shadow: 0 8px 32px rgba(0,0,0,0.3);
-    --bg-main: linear-gradient(135deg, #0f172a, #1e293b);
-    --card-bg: rgba(30, 41, 59, 0.7);
-    --navbar-bg: rgba(30, 41, 59, 0.8);
-    --blur-amount: 10px;
-    --card-opacity: 0.7;
+  --primary: #818cf8;
+  --secondary: #c084fc;
+  --success: #22d3ee;
+  --warning: #facc15;
+  --danger: #fb7185;
+  --info: #60a5fa;
+  --dark: #0f172a;
+  --light: rgba(30, 41, 59, 0.6);
+  --white: rgba(15, 23, 42, 0.7);
+  --border: rgba(51, 65, 85, 0.3);
+  --text-dark: #f1f5f9;
+  --text-light: #94a3b8;
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  --bg-main: linear-gradient(135deg, #0f172a, #1e293b);
+  --card-bg: rgba(30, 41, 59, 0.6);
+  --navbar-bg: rgba(49, 46, 129, 0.8);
+  --blur-amount: 15px;
+  --card-opacity: 0.75;
 }
 
 /* ==================== Body & Container ==================== */
@@ -120,6 +117,16 @@ body {
 [data-theme="blur-dark"] body {
     backdrop-filter: blur(var(--blur-amount));
 }
+
+/* Smooth Theme Transition */
+body.theme-transition {
+  transition: background 0.4s ease, color 0.4s ease;
+}
+
+html {
+  transition: background-color 0.4s ease, color 0.4s ease;
+}
+
 
 /* ==================== Navbar ==================== */
 
@@ -2150,27 +2157,19 @@ async function sendTestEmail() {
         setInterval(fetchAllData, 30000);
     </script>
 
-   <script>
+  <script>
 // Mobile Menu Toggle
 function toggleMobileMenu() {
     const menu = document.getElementById('navbarMenu');
     const toggleBtn = document.querySelector('.mobile-menu-toggle i');
-    
     menu.classList.toggle('active');
-    
-    // Toggle icon
-    if (menu.classList.contains('active')) {
-        toggleBtn.className = 'fas fa-times';
-    } else {
-        toggleBtn.className = 'fas fa-bars';
-    }
+    toggleBtn.className = menu.classList.contains('active') ? 'fas fa-times' : 'fas fa-bars';
 }
 
 // Close menu when clicking outside
 document.addEventListener('click', function(event) {
     const navbar = document.querySelector('.navbar-container');
     const menu = document.getElementById('navbarMenu');
-    
     if (menu && !navbar.contains(event.target) && window.innerWidth <= 768) {
         menu.classList.remove('active');
         const toggleBtn = document.querySelector('.mobile-menu-toggle i');
@@ -2178,7 +2177,7 @@ document.addEventListener('click', function(event) {
     }
 });
 
-// Close menu on window resize to desktop
+// Close menu on window resize
 window.addEventListener('resize', function() {
     const menu = document.getElementById('navbarMenu');
     if (window.innerWidth > 768 && menu && menu.classList.contains('active')) {
@@ -2188,32 +2187,57 @@ window.addEventListener('resize', function() {
     }
 });
 
-// Theme Management
+// 🌈 Theme Management
 function initTheme() {
     const savedTheme = localStorage.getItem('theme') || 'light';
     document.documentElement.setAttribute('data-theme', savedTheme);
     updateThemeUI(savedTheme);
 }
 
+// Toggle dropdown
 function toggleThemeDropdown() {
     const dropdown = document.getElementById('themeDropdown');
     dropdown.classList.toggle('show');
 }
 
+// ✨ Smooth Theme Transition
 function setTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
-    updateThemeUI(theme);
+    const body = document.body;
+
+    // Add transition overlay
+    body.classList.add('theme-transition');
+    document.documentElement.style.transition = 'filter 0.4s ease, background 0.4s ease, color 0.4s ease';
+    document.documentElement.style.filter = 'blur(10px) brightness(1.1)';
+
+    // Wait for blur animation
+    setTimeout(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+        updateThemeUI(theme);
+    }, 200);
+
+    // Smoothly remove blur
+    setTimeout(() => {
+        document.documentElement.style.filter = 'blur(0px) brightness(1)';
+    }, 400);
+
+    // End transition class after fade
+    setTimeout(() => {
+        body.classList.remove('theme-transition');
+        document.documentElement.style.transition = '';
+    }, 700);
+
     toggleThemeDropdown();
 }
 
+// Update theme icons and active states
 function updateThemeUI(theme) {
     document.querySelectorAll('.theme-option').forEach(opt => {
         opt.classList.remove('active');
     });
     const activeOption = document.querySelector(`[data-theme-value="${theme}"]`);
     if (activeOption) activeOption.classList.add('active');
-    
+
     const icons = {
         'light': 'fa-sun',
         'dark': 'fa-moon',
@@ -2229,17 +2253,16 @@ function updateThemeUI(theme) {
 document.addEventListener('click', function(event) {
     const themeSelector = document.querySelector('.theme-selector');
     const themeDropdown = document.getElementById('themeDropdown');
-    
     if (themeSelector && !themeSelector.contains(event.target) && themeDropdown) {
         themeDropdown.classList.remove('show');
     }
 });
 
-// Initialize on load
-window.addEventListener('DOMContentLoaded', function() {
-    initTheme();
-});
+// Initialize
+window.addEventListener('DOMContentLoaded', initTheme);
 </script>
+
 
 </body>
 </html>
+
