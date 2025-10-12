@@ -943,6 +943,9 @@ LOGIN_TEMPLATE = '''
                     <span>Password</span>
                     <code>admin123</code>
                 </div>
+                <div class="cred">
+                    <span>**If Default Password Doesn't Accept Try Contact Admin!!</span>
+                </div>
             </div>
 
             <div class="footer">
@@ -1555,5 +1558,6 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
+
 
 
