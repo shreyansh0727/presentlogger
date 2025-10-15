@@ -141,7 +141,37 @@ with app.app_context():
     create_initial_api_key()
 
 # ==================== API ROUTES ====================
-@app.route('/')
+@app.route('/', methods=['GET'])
+def index():
+    """API Information"""
+    return jsonify({
+        'name': 'Enhanced Arduino RFID Attendance System API',
+        'version': '2.0.0',
+        'description': 'Advanced REST API for IoT-based student attendance tracking',
+        'status': 'active',
+        'database_status': 'connected',
+        'features': [
+            'Real-time updates',
+            'Advanced analytics',
+            'Bulk operations',
+            'Enhanced security',
+            'Mobile responsive UI'
+        ],
+        'endpoints': {
+            'students': '/api/students',
+            'attendance': '/api/attendance/log',
+            'logs': '/api/logs',
+            'dashboard': '/dashboard',
+            'reports': '/api/reports/daily',
+            'analytics': '/api/analytics/advanced',
+            'login': '/login'
+        },
+        'arduino_integration': 'enabled',
+        'timezone': 'Asia/Kolkata',
+        'uptime': calculate_uptime()
+    })
+
+@app.route('/info')
 def info_page():
     """Project information page"""
     return render_template('index.html')
@@ -1559,6 +1589,7 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
+
 
 
 
