@@ -310,6 +310,7 @@ def log_attendance():
         
         # Parse timestamp
         timestamp = datetime.strptime(data['timestamp'], '%H:%M:%S').time()
+        timestamp_str = data['timestamp']  # ✅ ADDED: Keep string version for MongoDB
         
         # Get school settings for late calculation
         settings = SchoolSettings.get_settings()
@@ -345,7 +346,7 @@ def log_attendance():
         
         # Update student presence
         if data['action'] == 'ENTRY':
-            Student.update_presence(data['rfid_uid'], True, entry_time=timestamp)
+            Student.update_presence(data['rfid_uid'], True, entry_time=timestamp_str)  # ✅ CHANGED
             
             # Send late arrival email if enabled and student is late
             if is_late:
@@ -357,7 +358,7 @@ def log_attendance():
                     print(f"❌ Failed to send late arrival email: {e}")
                     
         elif data['action'] == 'EXIT':
-            Student.update_presence(data['rfid_uid'], False, exit_time=timestamp)
+            Student.update_presence(data['rfid_uid'], False, exit_time=timestamp_str)  # ✅ CHANGED
         
         # Emit real-time update via SocketIO
         socketio.emit('attendance_update', {
@@ -380,7 +381,6 @@ def log_attendance():
     except Exception as e:
         print(f"❌ Attendance log error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 400
-
 
 @app.route('/api/attendance/unknown', methods=['POST'])
 @api_key_required
@@ -1589,6 +1589,7 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
+
 
 
 
