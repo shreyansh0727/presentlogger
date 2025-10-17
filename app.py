@@ -13,9 +13,10 @@ import pytz
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import secrets
-import time
+import time 
+from threading import Thread
 import requests
-
+from time import perf_counter
 EMAIL_API_URL = "https://email-service-474903.uc.r.appspot.com/send-email"
 EMAIL_API_KEY = "jhfhhfh87373899874djwjwhqrmvnbi8976jj"
 
@@ -279,23 +280,33 @@ def modify_student(student_id):
 @app.route('/api/student', methods=['GET'])
 @api_key_required
 def get_student_by_uid():
+    t0 = perf_counter()
     uid = request.args.get('uid')
     if not uid:
         return jsonify({'success': False, 'error': 'UID required'}), 400
-    
+
     try:
+        # IMPORTANT: The find_by_rfid call should use an index for speed!
         student = Student.find_by_rfid(uid)
+        elapsed = (perf_counter() - t0) * 1000  # ms
+        # For fast IoT usage, avoid expensive lookups/processing!
         if student:
-            return jsonify({
+            response = {
                 'found': True,
                 'reg_no': student['reg_no'],
                 'name': student['name'],
                 'class': student['class_name'],
-                'parent_email': student['parent_email'],
                 'is_present': student['is_present']
-            })
-        return jsonify({'found': False}), 404
+            }
+            print(f"/api/student {uid}: OK ({elapsed:.1f} ms)")
+            return jsonify(response)
+        # For Arduino, 404 may confuse the device: instead, always return 200 with found=False
+        print(f"/api/student {uid}: NOT_FOUND ({elapsed:.1f} ms)")
+        return jsonify({'found': False}), 200
+
     except Exception as e:
+        elapsed = (perf_counter() - t0) * 1000
+        print(f"/api/student {uid}: ERROR {e} ({elapsed:.1f} ms)")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/attendance/log', methods=['POST'])
@@ -308,30 +319,26 @@ def log_attendance():
             if field not in data:
                 return jsonify({'success': False, 'error': f'Missing: {field}'}), 400
         
-        # Parse timestamp
+        # Parse and validate timestamp, minimal error catching
         timestamp = datetime.strptime(data['timestamp'], '%H:%M:%S').time()
-        timestamp_str = data['timestamp']  # ✅ ADDED: Keep string version for MongoDB
-        
-        # Get school settings for late calculation
-        settings = SchoolSettings.get_settings()
+        timestamp_str = data['timestamp']
+
+        # Quick config / fast calculation for late
+        settings = SchoolSettings.get_settings(cache=True)  # Use cached config if possible
         school_start_time = datetime.strptime(settings.get('school_start_time', '09:00:00'), '%H:%M:%S').time()
         late_threshold = settings.get('late_threshold_minutes', 15)
-        
-        # Calculate if late
         is_late = False
         late_by_minutes = 0
-        
+
         if data['action'] == 'ENTRY':
-            # Convert times to minutes for comparison
             arrival_minutes = timestamp.hour * 60 + timestamp.minute
             start_minutes = school_start_time.hour * 60 + school_start_time.minute
             late_threshold_minutes = start_minutes + late_threshold
-            
             if arrival_minutes > late_threshold_minutes:
                 is_late = True
                 late_by_minutes = arrival_minutes - start_minutes
-        
-        # Create attendance log
+
+        # -- Main DB writes, do ASAP --
         log = AttendanceLog.create(
             rfid_uid=data['rfid_uid'],
             reg_no=data['reg_no'],
@@ -343,41 +350,42 @@ def log_attendance():
             is_late=is_late,
             device_info=data.get('device_info', {})
         )
-        
-        # Update student presence
         if data['action'] == 'ENTRY':
-            Student.update_presence(data['rfid_uid'], True, entry_time=timestamp_str)  # ✅ CHANGED
-            
-            # Send late arrival email if enabled and student is late
-            if is_late:
+            Student.update_presence(data['rfid_uid'], True, entry_time=timestamp_str)
+        elif data['action'] == 'EXIT':
+            Student.update_presence(data['rfid_uid'], False, exit_time=timestamp_str)
+
+        # -- Return HTTP response to Arduino IMMEDIATELY --
+        response = {
+            'success': True,
+            'message': f'Attendance logged: {data["action"]}',
+            'is_late': is_late,
+            'late_by_minutes': late_by_minutes if is_late else 0
+        }
+
+        # -- Side effects in concurrent thread, not blocking response --
+        def side_effects():
+            if data['action'] == 'ENTRY' and is_late:
                 try:
                     student = Student.find_by_rfid(data['rfid_uid'])
                     if student and student.get('parent_email'):
                         send_late_arrival_email(student, data['timestamp'], late_by_minutes)
                 except Exception as e:
-                    print(f"❌ Failed to send late arrival email: {e}")
-                    
-        elif data['action'] == 'EXIT':
-            Student.update_presence(data['rfid_uid'], False, exit_time=timestamp_str)  # ✅ CHANGED
-        
-        # Emit real-time update via SocketIO
-        socketio.emit('attendance_update', {
-            'student_name': data['name'],
-            'action': data['action'],
-            'timestamp': data['timestamp'],
-            'is_late': is_late
-        })
-        
-        # Log system activity
-        log_system_activity('ATTENDANCE_LOGGED', f"{data['name']} - {data['action']}", None)
-        
-        return jsonify({
-            'success': True,
-            'message': f'Attendance logged: {data["action"]}',
-            'is_late': is_late,
-            'late_by_minutes': late_by_minutes if is_late else 0
-        })
-        
+                    print(f"❌ Failed to send late arrival email (async): {e}")
+
+            # SocketIO, logging, etc (if needed for web dashboard)
+            socketio.emit('attendance_update', {
+                'student_name': data['name'],
+                'action': data['action'],
+                'timestamp': data['timestamp'],
+                'is_late': is_late
+            })
+            log_system_activity('ATTENDANCE_LOGGED', f"{data['name']} - {data['action']}", None)
+
+        Thread(target=side_effects).start()
+
+        return jsonify(response)
+
     except Exception as e:
         print(f"❌ Attendance log error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 400
@@ -385,17 +393,43 @@ def log_attendance():
 @app.route('/api/attendance/unknown', methods=['POST'])
 @api_key_required
 def log_unknown_card():
+    t0 = perf_counter()
     try:
         data = request.get_json()
-        UnknownCard.create(data['rfid_uid'], data['timestamp'], data['date'], data.get('device_info', {}))
-        
-        socketio.emit('system_alert', {
-            'message': f'Unknown card: {data["rfid_uid"]}',
-            'type': 'warning'
-        })
-        
-        return jsonify({'success': True, 'message': 'Unknown card logged'})
+        required = ['rfid_uid', 'timestamp', 'date']
+        for field in required:
+            if field not in data:
+                return jsonify({'success': False, 'error': f'Missing: {field}'}), 400
+
+        # Fast DB insert only
+        UnknownCard.create(
+            data['rfid_uid'],
+            data['timestamp'],
+            data['date'],
+            data.get('device_info', {})
+        )
+        elapsed = (perf_counter() - t0) * 1000  # ms
+
+        # Respond to Arduino immediately—do not block for notifications/web
+        response = {'success': True, 'message': 'Unknown card logged'}
+        print(f"/api/attendance/unknown: {data['rfid_uid']} OK ({elapsed:.1f} ms)")
+
+        # Web dashboard notification as background task for speed
+        def background_emit():
+            try:
+                socketio.emit('system_alert', {
+                    'message': f"Unknown card: {data['rfid_uid']}",
+                    'type': 'warning'
+                })
+            except Exception as e:
+                print(f"SocketIO emit failed: {e}")
+
+        Thread(target=background_emit).start()
+        return jsonify(response)
+
     except Exception as e:
+        elapsed = (perf_counter() - t0) * 1000
+        print(f"/api/attendance/unknown: ERROR {e} ({elapsed:.1f} ms)")
         return jsonify({'success': False, 'error': str(e)}), 400
 
 @app.route('/api/system/heartbeat', methods=['POST'])
@@ -1589,9 +1623,3 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
-
-
-
-
-
-
