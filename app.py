@@ -324,7 +324,7 @@ def log_attendance():
         timestamp_str = data['timestamp']
 
         # Quick config / fast calculation for late
-        settings = SchoolSettings.get_settings(cache=True)  # Use cached config if possible
+        settings = SchoolSettings.get_settings()
         school_start_time = datetime.strptime(settings.get('school_start_time', '09:00:00'), '%H:%M:%S').time()
         late_threshold = settings.get('late_threshold_minutes', 15)
         is_late = False
@@ -1623,3 +1623,4 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
+
