@@ -293,30 +293,34 @@ def get_student_by_uid():
 def log_attendance():
     try:
         data = request.get_json()
-        # Only rfid_uid and action are required now.
-        required = ['rfid_uid', 'action']
-        for field in required:
-            if field not in data:
-                return jsonify({'success': False, 'error': f'Missing: {field}'}), 400
+        # Only rfid_uid is required now.
+        if 'rfid_uid' not in data:
+            return jsonify({'success': False, 'error': 'Missing: rfid_uid'}), 400
 
         # Fetch student info
         student = Student.find_by_rfid(data['rfid_uid'])
         if not student:
             return jsonify({'success': False, 'error': 'Student not found'}), 404
 
+        # Decide action: ENTRY if not present, EXIT if present
+        if not student["is_present"]:
+            action = "ENTRY"
+        else:
+            action = "EXIT"
+
         # Get server-side IST timestamp and date
         now_ist = datetime.now(pytz.timezone('Asia/Kolkata'))
         timestamp = now_ist.strftime('%H:%M:%S')
         date_str = now_ist.strftime('%Y-%m-%d')
 
-        # Fast late detection
+        # Fast late detection (only for ENTRY)
         settings = SchoolSettings.get_settings()
         school_start_time = datetime.strptime(settings.get('school_start_time', '09:00:00'), '%H:%M:%S').time()
         late_threshold = settings.get('late_threshold_minutes', 15)
         is_late = False
         late_by_minutes = 0
 
-        if data['action'] == 'ENTRY':
+        if action == 'ENTRY':
             arr_minutes = now_ist.hour * 60 + now_ist.minute
             start_minutes = school_start_time.hour * 60 + school_start_time.minute
             if arr_minutes > start_minutes + late_threshold:
@@ -329,27 +333,29 @@ def log_attendance():
             reg_no=student['reg_no'],
             student_name=student['name'],
             class_name=student['class_name'],
-            action=data['action'],
+            action=action,
             timestamp=timestamp,
             log_date=date_str,
             is_late=is_late,
             device_info=data.get('device_info', {})
         )
-        if data['action'] == 'ENTRY':
+        if action == 'ENTRY':
             Student.update_presence(data['rfid_uid'], True, entry_time=timestamp)
-        elif data['action'] == 'EXIT':
+        elif action == 'EXIT':
             Student.update_presence(data['rfid_uid'], False, exit_time=timestamp)
 
         response = {
             'success': True,
-            'message': f"Attendance logged: {data['action']}",
+            'action': action,
+            'is_present': (action == 'ENTRY'),  # Will be present after ENTRY, absent after EXIT
+            'message': f"Attendance logged: {action}",
             'is_late': is_late,
             'late_by_minutes': late_by_minutes if is_late else 0
         }
 
-        # Launch side effects as thread as before
+        # Launch side effects as a thread as before
         def side_effects():
-            if data['action'] == 'ENTRY' and is_late:
+            if action == 'ENTRY' and is_late:
                 try:
                     if student and student.get('parent_email'):
                         send_late_arrival_email(student, timestamp, late_by_minutes)
@@ -363,6 +369,7 @@ def log_attendance():
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
+
 
 @app.route('/api/attendance/unknown', methods=['POST'])
 @api_key_required
@@ -1590,5 +1597,6 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
+
 
 
