@@ -1698,27 +1698,30 @@ tbody tr:hover {
         }
 
         // Fetch recent logs
-        async function fetchRecentLogs() {
-            const response = await fetch('/api/reports/daily');
-            const data = await response.json();
-            if (data.success) {
-                const tbody = document.getElementById('recentLogsBody');
-                tbody.innerHTML = '';
-                data.present_students.slice(0, 10).forEach(student => {
-                    tbody.innerHTML += `
-                        <tr>
-                            <td>${student.entry_time || '-'}</td>
-                            <td>${student.name}</td>
-                            <td>${student.class_name}</td>
-                            <td><span class="badge badge-success">ENTRY</span></td>
-                            <td>${student.is_late ? 
-                                '<span class="badge badge-warning">Late</span>' : 
-                                '<span class="badge badge-success">On Time</span>'}</td>
-                        </tr>
-                    `;
-                });
-            }
-        }
+        // Option B: Prefer real "recent activity" using recent_logs from API
+async function fetchRecentLogs() {
+  const response = await fetch('/api/reports/daily');
+  const data = await response.json();
+  if (data.success) {
+    const tbody = document.getElementById('recentLogsBody');
+    tbody.innerHTML = '';
+    data.recent_logs.forEach(log => {
+      const badgeClass = log.action === 'EXIT' ? 'badge-danger' : 'badge-success';
+      tbody.innerHTML += `
+        <tr>
+          <td>${log.timestamp}</td>
+          <td>${log.name}</td>
+          <td>${log.class_name || '-'}</td>
+          <td><span class="badge ${badgeClass}">${log.action}</span></td>
+          <td>${log.is_late ? 
+            '<span class="badge badge-warning">Late</span>' : 
+            '<span class="badge badge-success">On Time</span>'}</td>
+        </tr>
+      `;
+    });
+  }
+}
+
 
         // Fetch all students
         async function fetchAllStudents() {
@@ -2265,6 +2268,7 @@ window.addEventListener('DOMContentLoaded', initTheme);
 
 </body>
 </html>
+
 
 
 
