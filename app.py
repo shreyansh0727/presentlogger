@@ -424,25 +424,63 @@ def heartbeat():
 def daily_report():
     try:
         report_date = request.args.get('date', get_current_date().strftime('%Y-%m-%d'))
+
         all_students = Student.find_all()
         logs = AttendanceLog.find_by_date(report_date)
-        
+
+        # Ensure logs are in chronological order for reliable picks
+        logs_sorted = sorted(logs, key=lambda l: l['timestamp'])  # timestamps are same-day HH:MM:SS [assumed]
+
+        # Index logs per student once
+        logs_by_uid = {}
+        for log in logs_sorted:
+            logs_by_uid.setdefault(log['rfid_uid'], []).append(log)
+
         present_students = []
         for student in all_students:
-            student_logs = [log for log in logs if log['rfid_uid'] == student['rfid_uid']]
-            if student_logs:
-                entry = [l for l in student_logs if l['action'] == 'ENTRY']
-                exit_logs = [l for l in student_logs if l['action'] == 'EXIT']
-                present_students.append({
-                    **student,
-                    'entry_time': entry[0]['timestamp'] if entry else None,
-                    'exit_time': exit_logs[-1]['timestamp'] if exit_logs else None,
-                    'is_late': entry[0].get('is_late', False) if entry else False
-                })
-        
-        absent_students = [s for s in all_students if s['rfid_uid'] not in [p['rfid_uid'] for p in present_students]]
-        late = AttendanceLog.get_late_arrivals(report_date)
-        
+            uid = student['rfid_uid']
+            s_logs = logs_by_uid.get(uid, [])
+            if not s_logs:
+                continue
+
+            # First ENTRY (if any) and last EXIT (if any)
+            entry_log = next((l for l in s_logs if l['action'] == 'ENTRY'), None)
+            exit_logs = [l for l in s_logs if l['action'] == 'EXIT']
+            last_exit = exit_logs[-1] if exit_logs else None
+
+            # Latest log of the day defines last_action (ENTRY/EXIT)
+            latest_log = s_logs[-1]
+            last_action = latest_log['action']
+
+            # Normalize class_name for frontend (backward compatible)
+            class_name = student.get('class_name', student.get('class'))
+
+            present_students.append({
+                **student,
+                'class_name': class_name,
+                'entry_time': entry_log['timestamp'] if entry_log else None,
+                'exit_time': last_exit['timestamp'] if last_exit else None,
+                'is_late': bool(entry_log.get('is_late', False)) if entry_log else False,
+                'last_action': last_action
+            })
+
+        present_uids = {p['rfid_uid'] for p in present_students}
+        absent_students = [s for s in all_students if s['rfid_uid'] not in present_uids]
+
+        # Optional: include last N recent logs for a "Recent Activity" table
+        recent_logs = sorted(logs, key=lambda l: l['timestamp'], reverse=True)[:10]
+        # Enrich recent logs with student metadata (name/class_name)
+        name_by_uid = {s['rfid_uid']: s['name'] for s in all_students}
+        class_by_uid = {s['rfid_uid']: s.get('class_name', s.get('class')) for s in all_students}
+        recent_logs = [
+            {
+                **l,
+                'name': name_by_uid.get(l['rfid_uid'], 'Unknown'),
+                'class_name': class_by_uid.get(l['rfid_uid'], '-')
+            }
+            for l in recent_logs
+        ]
+
         return jsonify({
             'success': True,
             'date': report_date,
@@ -450,14 +488,16 @@ def daily_report():
                 'total_students': len(all_students),
                 'present_count': len(present_students),
                 'absent_count': len(absent_students),
-                'attendance_rate': round((len(present_students)/len(all_students))*100,2) if all_students else 0,
-                'late_arrivals': len(late)
+                'attendance_rate': round((len(present_students) / len(all_students)) * 100, 2) if all_students else 0,
+                'late_arrivals': len(AttendanceLog.get_late_arrivals(report_date))
             },
             'present_students': present_students,
-            'absent_students': absent_students
+            'absent_students': absent_students,
+            'recent_logs': recent_logs  # frontend can use this directly
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/system/stats', methods=['GET'])
 @login_required
@@ -1597,6 +1637,7 @@ def dashboard():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=app.config['DEBUG'],allow_unsafe_werkzeug=True)
+
 
 
 
