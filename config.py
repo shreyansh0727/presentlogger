@@ -20,8 +20,8 @@ class Config:
     # ==================== DATABASE CONFIGURATION ====================
     
     # MongoDB Configuration (Primary for production)
-    MONGODB_URI = 'mongodb+srv://shreyanshm90051_db_user:3UJXot9assv0FTM2@attendance.uuztefq.mongodb.net/?retryWrites=true&w=majority&appName=attendance'
-    MONGODB_DB_NAME = os.environ.get('MONGODB_DB_NAME') or 'attendance'
+    MONGODB_URI = os.environ.get('MONGODB_URI')
+    MONGODB_DB_NAME = os.environ.get('MONGODB_DB_NAME')
     
     # MongoDB Connection Settings
     MONGODB_SETTINGS = {
@@ -48,8 +48,8 @@ class Config:
     MAIL_SERVER = 'smtp.gmail.com'
     MAIL_PORT = 587
     MAIL_USE_TLS = True
-    MAIL_USERNAME = os.environ.get('EMAIL_USER') or 'attendancelogger.sys@gmail.com'
-    MAIL_PASSWORD = os.environ.get('EMAIL_PASS') or 'xnjnqnmforybomol'
+    MAIL_USERNAME = os.environ.get('EMAIL_USER')
+    MAIL_PASSWORD = os.environ.get('EMAIL_PASS')
     MAIL_DEFAULT_SENDER = os.environ.get('EMAIL_USER') or 'attendancelogger.sys@gmail.com'
     
     # ==================== TIMEZONE & TIME SETTINGS ====================
@@ -247,3 +247,4 @@ def get_config(config_name=None):
     if config_name is None:
         config_name = os.environ.get('FLASK_ENV', 'development')
     return config.get(config_name, config['default'])
+
